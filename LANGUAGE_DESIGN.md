@@ -3,13 +3,13 @@
 ## Philosophy
 
 Flux is designed for the AI era. Instead of reinventing low-level operations, it provides:
-- **AI as a first-class primitive**: Use LLMs for complex reasoning, extraction, and classification
+- **AI as a first-class primitive**: Use `infer` for classification, extraction, and generation
 - **Batteries-included standard library**: High-level utilities for validation, I/O, and data transformation
 - **Minimal core syntax**: Only 8 reserved words for maximum clarity
 - **Natural language style**: Zero brackets, parentheses, colons or semicolons
 - **High-level orchestration**: Compose AI and standard library functions, don't rebuild basics
 
-**Best for**: Document intelligence, natural language interfaces, content classification, multi-modal pipelines, and intelligent automation.
+**Best for**: Document intelligence, content classification, natural language interfaces, multi-modal pipelines, intelligent automation, and conversational AI.
 
 ## Core Syntax
 
@@ -18,23 +18,48 @@ Flux is designed for the AI era. Instead of reinventing low-level operations, it
 Flux uses only 8 essential keywords:
 - **`define`** - create a function or type
 - **`with`** - declare parameters
-- **`infer`** - invoke AI inference (the key primitive)
+- **`infer`** - invoke AI (classification, extraction, or generation)
 - **`expect`** - constrain AI output structure
 - **`if`** - conditional branching
 - **`else`** - alternative branch
 - **`let`** - variable binding with `=`
 - **`return`** - return values
 
-**AI validation checks:**
+**Additional modifiers:**
 - `optional` - mark fields that can be missing
-- `has` - check field presence
-  - `data has "field1", "field2"` - check specific fields
-  - `data is complete` - all required fields present (default success)
-  - `data has all` - all fields present (including optional)
+- `prompt` - provide instructions for generation mode
+- `result` - refers to the inferred data within an `infer` block
+- `if result not has ... retry N` - retry if specified fields missing
+- `if result not complete retry N` - retry until all required fields present
+- `has` - check field presence: `data has "field1", "field2"`
+- `is complete` - check if all required fields present
+- `has all` - check if all fields present (including optional)
+- `not` - negate conditions
 
-Inference always returns data. Use `has` to check what was extracted and decide whether to retry.
+**Generation mode parameters:**
+- `max_length`, `tone`, `style`, `format`, `sections`, `include`, `action`
 
 Everything else (validation, data operations, I/O) is provided by the standard library.
+
+### Data Type Definitions
+
+Define reusable structures for use in `expect`:
+
+```
+define priority as "low" or "medium" or "high" or "critical"
+define sentiment as "positive" or "negative" or "neutral"
+
+define user as
+  name text
+  email text
+  phone text optional
+
+define invoice as
+  invoice_number text
+  vendor text
+  total number
+  date text optional
+```
 
 ### Function Definition
 
@@ -50,20 +75,42 @@ define analyze_contract with contract_pdf
   return summary
 ```
 
-### AI Inference: The Core Primitive
+### Function Examples
 
-The `infer` keyword delegates complex tasks to AI with structured constraints:
-
+**Classification:**
 ```
-define categorize_email with email_body
-  let category = infer email_body
-    expect "spam" or "inbox" or "important"
-  
-  return category
+define sentiment as "positive" or "negative" or "neutral"
+
+define analyze_sentiment with review_text
+  let emotion = infer review_text
+    expect sentiment
+  return emotion
 ```
 
-### Conditional Logic
+**Extraction:**
+```
+define invoice as
+  invoice_number text
+  vendor text
+  total number
 
+define extract_invoice with document
+  let data = infer document
+    expect invoice
+  return data
+```
+
+**Generation:**
+```
+define create_summary with article_text
+  let summary = infer article_text
+    expect text
+    prompt "create a 2-3 sentence summary"
+    style "concise"
+  return summary
+```
+
+**Conditional Logic:**
 ```
 define process_order with email_text
   let order = infer email_text
@@ -76,37 +123,6 @@ define process_order with email_text
     return notify_warehouse with order
   else
     return schedule_delivery with order
-```
-
-### Data Structures
-
-Define reusable data structures that can be referenced in `expect` blocks:
-
-```
-define invoice as
-  invoice_number text
-  vendor text
-  line_items list of
-    description text
-    quantity number
-    price number
-  total number
-
-define priority as "low" or "medium" or "high" or "critical"
-```
-
-These structures are used in `expect` to ensure consistent AI outputs:
-
-```
-define extract_invoice with text
-  let result = infer text
-    expect invoice
-  return result
-
-define classify_ticket with ticket_text
-  let urgency = infer ticket_text
-    expect priority
-  return urgency
 ```
 
 ## Standard Library
@@ -131,11 +147,12 @@ define process_document with pdf_file
 
 ## AI Inference in Depth
 
-## AI Inference in Depth
+`infer` adapts based on what you `expect` - classification, extraction, or generation.
 
-The `infer` keyword delegates complex tasks to AI. Inference always returns data, even if incomplete.
+### Classification Mode - Union Types
 
-### Simple Union Types
+Use union types to classify into predefined categories:
+
 ```
 define category as "spam" or "inbox" or "important"
 
@@ -145,7 +162,22 @@ define categorize_email with email_body
   return result
 ```
 
-### Complex Structured Types
+```
+define sentiment as "positive" or "negative" or "neutral"
+define urgency as "low" or "medium" or "high" or "critical"
+
+define classify_feedback with customer_feedback
+  let emotion = infer customer_feedback
+    expect sentiment
+  let priority = infer customer_feedback
+    expect urgency
+  return emotion, priority
+```
+
+### Extraction Mode - Structured Types
+
+Use structured types to extract data:
+
 ```
 define receipt_item as
   description text
@@ -155,17 +187,43 @@ define receipt_item as
 define extract_receipt with photo
   let items = infer photo
     expect list of receipt_item
-  
-  # Check if critical fields present
-  for each item in items
-    if item has "description", "amount"
-      # Good - has required fields
-      continue
-    else
-      # Missing critical data
-      log_incomplete_item with item
-  
   return items
+```
+
+### Generation Mode - Text with Instructions
+
+Use `expect text` with `prompt` to generate content:
+
+```
+define summarize_article with article_text
+  let summary = infer article_text
+    expect text
+    prompt "create a concise summary in 2-3 sentences"
+    max_length 200
+  return summary
+```
+
+```
+define write_response with customer_email
+  let response = infer customer_email
+    expect text
+    prompt "write a professional, empathetic response that apologizes and offers a solution"
+    tone "friendly"
+  return response
+```
+
+### Combining Multiple Inputs for Generation
+
+Pass multiple data sources to guide generation:
+
+```
+define create_insights with sales_data, trends_data, goals
+  let report = infer sales_data, trends_data, goals
+    expect text
+    prompt "analyze sales against trends and goals, provide actionable insights"
+    format "executive summary with bullet points"
+    sections "overview, analysis, recommendations"
+  return report
 ```
 
 ### Validation Patterns
@@ -308,71 +366,57 @@ define priority as "low" or "medium" or "high" or "critical"
 
 ### Validation and Error Handling
 
-Flux always accepts partial data from AI inference. Use `has` to check field presence:
+Flux always accepts partial data from AI inference. Use `result` within `infer` blocks for retry logic:
 
 ```
 define parse_user_form with form_text
   let user = infer form_text
     expect user
+    if result not has "email", "name" retry 3
   
   if user has "email", "name"
-    # Critical fields present - proceed
     return process_user with user
   else
-    # Missing critical fields - retry
-    let user = infer form_text
-      expect user
-    return user
+    return flag_for_review with user
 ```
 
-**Field presence checks:**
+**Retry patterns:**
 
-1. **Check specific fields:**
+1. **Retry for specific fields:**
 ```
+let invoice = infer text
+  expect invoice
+  if result not has "total", "invoice_number" retry 2
+
 if invoice has "total", "invoice_number"
   return invoice
 else
-  # Retry if critical fields missing
-  let invoice = infer text
-    expect invoice
+  return flag_for_review with invoice
 ```
 
-2. **Check all required fields (default success):**
+2. **Retry until all required fields present:**
 ```
+let user = infer form_text
+  expect user
+  if result not complete retry 3
+
 if user is complete
-  return process_user with user
+  return save_user with user
 else
   return flag_for_review with user
 ```
 
-3. **Check all fields including optional:**
+3. **Accept degraded quality after retries:**
 ```
-if invoice has all
-  return invoice  # Everything extracted perfectly
-else
-  return invoice  # Some optional fields missing, but acceptable
-```
+let invoice = infer text
+  expect invoice
+  if result not has "total", "invoice_number", "vendor" retry 2
 
-**Example: Smart retry based on field priority**
-```
-define extract_invoice with text
-  let invoice = infer text
-    expect invoice
-  
-  # Retry only if critical fields missing
-  if invoice has "total", "invoice_number", "vendor"
-    return invoice
-  else
-    # Try one more time
-    let invoice = infer text
-      expect invoice
-    
-    if invoice has "total", "invoice_number"
-      # At minimum, we have these - acceptable
-      return invoice
-    else
-      # Still missing critical data
-      return flag_for_review with invoice
+# After retries, accept minimum
+if invoice has "total", "invoice_number"
+  return invoice
+else
+  return flag_for_review with invoice
 ```
 
 ## Real-World Examples
@@ -448,6 +492,43 @@ define process_order_email with email_text
     return send_email with "warehouse@company.com", order_data
   else
     return call_api with "schedule_delivery", order_data
+```
+
+### Content Generation with Data
+```
+define sales_report as
+  revenue number
+  top_products list of text
+  growth_rate number
+
+define create_summary_email with sales_data
+  # Extract key metrics
+  let report = infer sales_data
+    expect sales_report
+  
+  if report is complete
+    # Generate executive summary from extracted data
+    let email_body = infer report
+      expect text
+      prompt "create an executive summary email highlighting revenue, top products, and growth"
+      tone "professional but optimistic"
+      format "short paragraphs with key takeaways"
+    
+    return email_body
+  else
+    return flag_for_review with report
+```
+
+### Multi-Input Analysis
+```
+define analyze_campaign with campaign_data, competitor_data, market_trends
+  let analysis = infer campaign_data, competitor_data, market_trends
+    expect text
+    prompt "analyze campaign performance against competitors and market trends"
+    sections "performance summary, competitive position, recommendations"
+    style "data-driven with specific insights"
+  
+  return analysis
 ```
 
 ## Execution Examples
@@ -555,12 +636,13 @@ Respond with valid JSON matching the schema.
 
 ## Key Innovations
 
-1. **AI as First-Class Primitive**: `infer` makes LLM calls feel native
+1. **Unified AI Primitive**: `infer` handles classification, extraction, and generation based on `expect`
 2. **Type-Safe AI Output**: Define schemas once, reference in `expect` everywhere
 3. **Flexible Validation**: Three levels - specific fields, required fields, or all fields
 4. **Smart Retry Control**: User decides when to retry based on `has` checks
 5. **Always Returns Data**: Even incomplete extractions are useful
-6. **Minimal Syntax**: Only 8 keywords - everything else is standard library
+6. **Multi-Input Generation**: Pass multiple data sources to guide AI text generation
+7. **Minimal Syntax**: Only 8 keywords - everything else is standard library
 
 ## Design Principles
 
