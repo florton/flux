@@ -25,19 +25,18 @@ Flux uses only 8 essential keywords:
 - **`let`** - variable binding with `=`
 - **`return`** - return values
 
-**Additional modifiers:**
+**Additional modifiers (8 total):**
 - `optional` - mark fields that can be missing
-- `prompt` - provide instructions for generation mode
+- `prompt` - provide instructions and parameters for generation mode (tone, style, format, etc.)
 - `result` - refers to the inferred data within an `infer` block
-- `if result not has ... retry N` - retry if specified fields missing
-- `if result not complete retry N` - retry until all required fields present
-- `has` - check field presence: `data has "field1", "field2"`
-- `is complete` - check if all required fields present
-- `has all` - check if all fields present (including optional)
+- `has` - check field presence with three modes:
+  - `has "field1", "field2"` - check specific fields
+  - `has required` - check all required fields
+  - `has all` - check all fields including optional
 - `not` - negate conditions
-
-**Generation mode parameters:**
-- `max_length`, `tone`, `style`, `format`, `sections`, `include`, `action`
+- `retry N` - retry logic for failed validations
+- `batch N` / `batch all` - explicit batching (default: process each item)
+- `complexity N` - numeric model selection (1=fast/cheap, 2=balanced, 3=powerful/expensive)
 
 Everything else (validation, data operations, I/O) is provided by the standard library.
 
@@ -226,74 +225,85 @@ define create_insights with sales_data, trends_data, goals
   return report
 ```
 
-### Validation Patterns
+### List Processing & Complexity
 
-**1. Check specific critical fields:**
+**Default: Process each item individually (most accurate):**
 ```
+define receipt_item as
+  description text
+  amount number
+
+define process_receipts with photo_list
+  # Default behavior - processes each item
+  let items = infer photo_list
+    expect receipt_item
+    complexity 2
+  return items
+```
+
+**Process in batches (balanced accuracy and cost):**
+```
+define sentiment as "positive" or "negative" or "neutral"
+
+define classify_reviews with review_list
+  # Process 20 at a time - good for simple tasks
+  let sentiments = infer review_list batch 20
+    expect sentiment
+    complexity 1
+  return sentiments
+```
+
+**Process all together (fastest, cheapest, lower accuracy):**
+```
+define quick_classify with short_text_list
+  # Process entire list in one call
+  let categories = infer short_text_list batch all
+    expect list of category
+    complexity 1
+  return categories
+```
+
+**Complexity examples:**
+```
+# Complexity 1 - fast models for classification/simple extraction
+let category = infer email_body
+  expect category
+  complexity 1
+
+# Complexity 2 (default) - balanced models for structured extraction
 let invoice = infer text
   expect invoice
+  # complexity 2 is default, can be omitted
 
-if invoice has "total", "invoice_number"
-  return process_invoice with invoice
-else
-  # Retry once for critical fields
-  let invoice = infer text
-    expect invoice
-  return invoice
+# Complexity 3 - powerful models for analysis/reasoning
+let analysis = infer contract_pdf, market_data
+  expect text
+  prompt "provide comprehensive strategic analysis"
+  complexity 3
 ```
 
-**2. Check all required fields (default success):**
-```
-let user = infer form_text
-  expect user
+**Design Philosophy for List Processing:**
 
-if user is complete
-  return save_user with user
-else
-  return flag_for_review with user
-```
+1. **Default (no modifier)** - One LLM call per item
+   - Maximum accuracy for complex tasks
+   - Best for: document extraction, image analysis, complex classification
+   - Cost: Highest (N calls for N items)
 
-**3. Check all fields including optional:**
-```
-let data = infer input
-  expect document
+2. **`batch N`** - Process N items per call
+   - Balances accuracy and cost
+   - Best for: moderate classification, sentiment analysis
+   - Cost: Medium (N/batch_size calls)
 
-if data has all
-  return "perfect extraction"
-else if data is complete
-  return "acceptable - missing only optional fields"
-else
-  return "incomplete - missing required fields"
-```
+3. **`batch all`** - All items in one call
+   - Fastest and cheapest
+   - Best for: simple classification of short texts
+   - Cost: Lowest (1 call total)
+   - Risk: Lower accuracy, context window limits
 
-**Retry with degrading requirements:**
-```
-let invoice = infer text
-  expect invoice
-
-# First try: want everything
-if invoice has all
-  return invoice
-
-# Second try: need at minimum critical fields
-if invoice has "total", "invoice_number", "vendor"
-  return invoice
-else
-  let invoice = infer text
-    expect invoice
-  
-  # Final check: absolute minimum
-  if invoice has "total", "invoice_number"
-    return invoice
-  else
-    return flag_for_review with invoice
-```
-
-This pattern enables:
-- **Always get data** - Even partial extraction is useful
-- **Smart retry logic** - Retry only when critical fields missing
-- **Flexible validation** - Check exactly the fields you need
-- **Graceful degradation** - Accept less than perfect but usable data
+**Complexity scale (1-3):**
+- **`1`**: Fast, cheap models (gpt-3.5-turbo, claude-haiku)
+- **`2`**: Balanced models (gpt-4o-mini, claude-sonnet) - default
+- **`3`**: Powerful models (gpt-4o, claude-opus)
 
 ## Compilation Targets
 
@@ -314,6 +324,47 @@ async function interpretCommand(userInput: string): Promise<string> {
     }
   });
   return intent;
+}
+
+// Batch processing example
+async function classifyEmails(emails: string[]): Promise<string[]> {
+  const categories = await llm.inferBatch({
+    inputs: emails,
+    batchSize: 20,
+    schema: { type: "enum", values: ["spam", "inbox", "important"] },
+    complexity: 1,
+    retryCondition: (result) => result.hasRequired(),
+    maxRetries: 2
+  });
+  return categories;
+}
+
+// Default individual processing (no batch specified)
+async function processReceipts(photos: Image[]): Promise<ReceiptItem[]> {
+  const items = await Promise.all(
+    photos.map(photo => 
+      llm.infer({
+        input: photo,
+        schema: ReceiptItemSchema,
+        complexity: 2,
+        retryCondition: (result) => 
+          result.has("description", "amount"),
+        maxRetries: 2
+      })
+    )
+  );
+  return items;
+}
+
+// Batch all processing
+async function quickClassify(texts: string[]): Promise<string[]> {
+  const categories = await llm.infer({
+    input: texts,
+    batchSize: "all",
+    schema: { type: "array", items: { type: "enum", values: ["a", "b", "c"] } },
+    complexity: 1
+  });
+  return categories;
 }
 ```
 
@@ -398,9 +449,9 @@ else
 ```
 let user = infer form_text
   expect user
-  if result not complete retry 3
+  if result not has required retry 3
 
-if user is complete
+if user has required
   return save_user with user
 else
   return flag_for_review with user
@@ -506,7 +557,7 @@ define create_summary_email with sales_data
   let report = infer sales_data
     expect sales_report
   
-  if report is complete
+  if report has required
     # Generate executive summary from extracted data
     let email_body = infer report
       expect text
@@ -527,8 +578,56 @@ define analyze_campaign with campaign_data, competitor_data, market_trends
     prompt "analyze campaign performance against competitors and market trends"
     sections "performance summary, competitive position, recommendations"
     style "data-driven with specific insights"
+    complexity 3
   
   return analysis
+```
+
+### Batch Processing with Cost Optimization
+```
+define sentiment as "positive" or "negative" or "neutral"
+
+define analyze_customer_feedback with feedback_list
+  # Classify hundreds of reviews efficiently
+  let sentiments = infer feedback_list batch 20
+    expect sentiment
+    complexity 1
+    if result not has required retry 2
+  
+  # Aggregate results with standard library
+  let summary = transform_data with sentiments, "count by sentiment"
+  
+  # Generate insights from aggregated data
+  let insights = infer summary
+    expect text
+    prompt "analyze sentiment patterns and provide actionable insights"
+    complexity 3
+  
+  return insights
+```
+
+### Individual Processing for Accuracy
+```
+define receipt_item as
+  description text
+  amount number
+  category text
+
+define process_expense_receipts with photo_list
+  # Process each receipt photo individually (default behavior)
+  let items = infer photo_list
+    expect receipt_item
+    complexity 2
+    if result not has "description", "amount" retry 2
+  
+  # Generate expense report from all items
+  let report = infer items
+    expect text
+    prompt "create expense report summary with totals by category"
+    format "professional business format"
+    complexity 1
+  
+  return report
 ```
 
 ## Execution Examples
@@ -638,11 +737,12 @@ Respond with valid JSON matching the schema.
 
 1. **Unified AI Primitive**: `infer` handles classification, extraction, and generation based on `expect`
 2. **Type-Safe AI Output**: Define schemas once, reference in `expect` everywhere
-3. **Flexible Validation**: Three levels - specific fields, required fields, or all fields
+3. **Consolidated Validation**: Single `has` operator with three modes (specific fields, `required`, `all`)
 4. **Smart Retry Control**: User decides when to retry based on `has` checks
 5. **Always Returns Data**: Even incomplete extractions are useful
-6. **Multi-Input Generation**: Pass multiple data sources to guide AI text generation
-7. **Minimal Syntax**: Only 8 keywords - everything else is standard library
+6. **Default Individual Processing**: Lists processed item-by-item unless batching specified
+7. **Numeric Complexity Scale**: Simple 1-3 scale for model selection (1=fast, 2=balanced, 3=powerful)
+8. **Minimal Syntax**: Only 8 keywords + 8 modifiers - everything else is standard library
 
 ## Design Principles
 
