@@ -16,7 +16,7 @@ Flux is designed for the AI era. Instead of reinventing low-level operations, it
 ### Reserved Words (8 core keywords)
 
 Flux uses only 8 essential keywords:
-- **`define`** - create a function
+- **`define`** - create a function or type
 - **`with`** - declare parameters
 - **`infer`** - invoke AI inference (the key primitive)
 - **`expect`** - constrain AI output structure
@@ -24,6 +24,15 @@ Flux uses only 8 essential keywords:
 - **`else`** - alternative branch
 - **`let`** - variable binding with `=`
 - **`return`** - return values
+
+**AI validation checks:**
+- `optional` - mark fields that can be missing
+- `has` - check field presence
+  - `data has "field1", "field2"` - check specific fields
+  - `data is complete` - all required fields present (default success)
+  - `data has all` - all fields present (including optional)
+
+Inference always returns data. Use `has` to check what was extracted and decide whether to retry.
 
 Everything else (validation, data operations, I/O) is provided by the standard library.
 
@@ -124,7 +133,7 @@ define process_document with pdf_file
 
 ## AI Inference in Depth
 
-The `infer` keyword delegates complex tasks to AI with structured output constraints. Types can be defined once and reused across all `infer` blocks.
+The `infer` keyword delegates complex tasks to AI. Inference always returns data, even if incomplete.
 
 ### Simple Union Types
 ```
@@ -141,19 +150,92 @@ define categorize_email with email_body
 define receipt_item as
   description text
   amount number
-  category text
+  category text optional
 
 define extract_receipt with photo
   let items = infer photo
     expect list of receipt_item
+  
+  # Check if critical fields present
+  for each item in items
+    if item has "description", "amount"
+      # Good - has required fields
+      continue
+    else
+      # Missing critical data
+      log_incomplete_item with item
+  
   return items
 ```
 
+### Validation Patterns
+
+**1. Check specific critical fields:**
+```
+let invoice = infer text
+  expect invoice
+
+if invoice has "total", "invoice_number"
+  return process_invoice with invoice
+else
+  # Retry once for critical fields
+  let invoice = infer text
+    expect invoice
+  return invoice
+```
+
+**2. Check all required fields (default success):**
+```
+let user = infer form_text
+  expect user
+
+if user is complete
+  return save_user with user
+else
+  return flag_for_review with user
+```
+
+**3. Check all fields including optional:**
+```
+let data = infer input
+  expect document
+
+if data has all
+  return "perfect extraction"
+else if data is complete
+  return "acceptable - missing only optional fields"
+else
+  return "incomplete - missing required fields"
+```
+
+**Retry with degrading requirements:**
+```
+let invoice = infer text
+  expect invoice
+
+# First try: want everything
+if invoice has all
+  return invoice
+
+# Second try: need at minimum critical fields
+if invoice has "total", "invoice_number", "vendor"
+  return invoice
+else
+  let invoice = infer text
+    expect invoice
+  
+  # Final check: absolute minimum
+  if invoice has "total", "invoice_number"
+    return invoice
+  else
+    return flag_for_review with invoice
+```
+
 This pattern enables:
-- **Type reuse** across multiple functions
-- **Consistent schemas** for LLM prompts
-- **Compile-time validation** of expected structures
-- **Self-documenting code** with explicit data contracts
+- **Always get data** - Even partial extraction is useful
+- **Smart retry logic** - Retry only when critical fields missing
+- **Flexible validation** - Check exactly the fields you need
+- **Graceful degradation** - Accept less than perfect but usable data
 
 ## Compilation Targets
 
@@ -201,19 +283,22 @@ Respond with valid JSON: {"intent": "..."}
 - `text`, `number`, `bool`, `list`, `nothing`
 
 ### Composite Types
-Define reusable schemas that `expect` can reference:
+Define reusable schemas with optional fields for partial data:
 
 ```
 define address as
   street text
   city text
-  zip text
+  zip text optional
 
 define user as
   name text
   email text
-  address address
+  phone text optional
+  address address optional
 ```
+
+Fields marked `optional` allow partial extraction when AI can't find all data.
 
 ### Union Types
 ```
@@ -221,17 +306,74 @@ define status as "pending" or "complete" or "failed"
 define priority as "low" or "medium" or "high" or "critical"
 ```
 
-### Using Types with AI Inference
-Reference types in `expect` for consistent, validated outputs:
+### Validation and Error Handling
+
+Flux always accepts partial data from AI inference. Use `has` to check field presence:
 
 ```
 define parse_user_form with form_text
-  let user_data = infer form_text
+  let user = infer form_text
     expect user
-  return user_data
+  
+  if user has "email", "name"
+    # Critical fields present - proceed
+    return process_user with user
+  else
+    # Missing critical fields - retry
+    let user = infer form_text
+      expect user
+    return user
 ```
 
-This generates structured LLM prompts with the exact schema, ensuring type-safe AI outputs.
+**Field presence checks:**
+
+1. **Check specific fields:**
+```
+if invoice has "total", "invoice_number"
+  return invoice
+else
+  # Retry if critical fields missing
+  let invoice = infer text
+    expect invoice
+```
+
+2. **Check all required fields (default success):**
+```
+if user is complete
+  return process_user with user
+else
+  return flag_for_review with user
+```
+
+3. **Check all fields including optional:**
+```
+if invoice has all
+  return invoice  # Everything extracted perfectly
+else
+  return invoice  # Some optional fields missing, but acceptable
+```
+
+**Example: Smart retry based on field priority**
+```
+define extract_invoice with text
+  let invoice = infer text
+    expect invoice
+  
+  # Retry only if critical fields missing
+  if invoice has "total", "invoice_number", "vendor"
+    return invoice
+  else
+    # Try one more time
+    let invoice = infer text
+      expect invoice
+    
+    if invoice has "total", "invoice_number"
+      # At minimum, we have these - acceptable
+      return invoice
+    else
+      # Still missing critical data
+      return flag_for_review with invoice
+```
 
 ## Real-World Examples
 
@@ -239,7 +381,7 @@ This generates structured LLM prompts with the exact schema, ensuring type-safe 
 ```
 define line_item as
   description text
-  quantity number
+  quantity number optional
   price number
 
 define invoice as
@@ -247,13 +389,29 @@ define invoice as
   vendor text
   line_items list of line_item
   total number
+  date text optional
 
 define extract_invoice with invoice_pdf
   let text = read_file with invoice_pdf
-  let invoice_data = infer text
+  let invoice = infer text
     expect invoice
-  let validated = validate_schema with invoice_data
-  return validated
+  
+  # Smart retry - only if critical fields missing
+  if invoice has "total", "invoice_number", "vendor"
+    # Has critical fields - proceed
+    let validated = validate_schema with invoice
+    return validated
+  else
+    # Missing critical fields - retry once
+    let invoice = infer text
+      expect invoice
+    
+    if invoice has "total", "invoice_number"
+      # At minimum we have these
+      return invoice
+    else
+      # Still incomplete
+      return flag_for_review with invoice
 ```
 
 ### Multi-Step AI Pipeline with Types
@@ -399,10 +557,10 @@ Respond with valid JSON matching the schema.
 
 1. **AI as First-Class Primitive**: `infer` makes LLM calls feel native
 2. **Type-Safe AI Output**: Define schemas once, reference in `expect` everywhere
-3. **Minimal Syntax**: Only 8 keywords - everything else is standard library
-4. **Batteries Included**: Users orchestrate, not implement
-5. **Dual Compilation**: Transpile to TypeScript OR compile to AI prompts
-6. **Reusable Type System**: Types become LLM schema constraints automatically
+3. **Flexible Validation**: Three levels - specific fields, required fields, or all fields
+4. **Smart Retry Control**: User decides when to retry based on `has` checks
+5. **Always Returns Data**: Even incomplete extractions are useful
+6. **Minimal Syntax**: Only 8 keywords - everything else is standard library
 
 ## Design Principles
 
