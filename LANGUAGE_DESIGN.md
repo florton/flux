@@ -211,9 +211,9 @@ define invoice as
   total number
 
 define extract_invoice with document
-  let data = infer document
+  let invoice_data = infer document
     expect invoice
-  return data
+  return invoice_data
 ```
 
 **Generation:**
@@ -333,11 +333,11 @@ define process_invoice with pdf_path
   let text = read_file with pdf_path
     error return flag_error with "Cannot read file"
   
-  let invoice = infer text
+  let invoice_data = infer text
     expect invoice
     error return flag_error with "Inference failed"
   
-  let saved = write_to_database with invoice
+  let saved = write_to_database with invoice_data
     error return flag_error with "Database write failed"
   
   return saved
@@ -358,12 +358,12 @@ Handle AI API failures gracefully with fallback models and circuit breakers:
 **Fallback to alternative models:**
 ```
 define extract_invoice with pdf_text
-  let invoice = infer pdf_text
+  let invoice_data = infer pdf_text
     expect invoice
     complexity 2
     fallback complexity 3  # Try more powerful model if first fails
     if result not has required retry 2
-  return invoice
+  return invoice_data
 ```
 
 **Chain multiple fallback models:**
@@ -641,9 +641,9 @@ import types
 
 define process_invoice with pdf_path
   let text = read_file with pdf_path
-  let invoice = infer text
+  let invoice_data = infer text
     expect types.invoice
-  return invoice
+  return invoice_data
 
 define classify_urgency with ticket_text
   let level = infer ticket_text
@@ -658,9 +658,9 @@ import types.priority
 import utils.validation
 
 define process with data
-  let invoice = infer data
+  let invoice_data = infer data
     expect invoice
-  let validated = validation.check with invoice
+  let validated = validation.check with invoice_data
   return validated
 ```
 
@@ -967,7 +967,7 @@ let category = infer email_body
   complexity 1
 
 # Complexity 2 (default) - balanced models for structured extraction
-let invoice = infer text
+let invoice_data = infer text
   expect invoice
   # complexity 2 is default, can be omitted
 
@@ -1226,53 +1226,53 @@ Flux always accepts partial data from AI inference. Use `result` within `infer` 
 
 ```
 define parse_user_form with form_text
-  let user = infer form_text
+  let user_data = infer form_text
     expect user
     if result not has "email", "name" retry 3
   
-  if user has "email", "name"
-    return process_user with user
+  if user_data has "email", "name"
+    return process_user with user_data
   else
-    return flag_for_review with user
+    return flag_for_review with user_data
 ```
 
 **Retry patterns:**
 
 1. **Retry for specific fields:**
 ```
-let invoice = infer text
+let invoice_data = infer text
   expect invoice
   if result not has "total", "invoice_number" retry 2
 
-if invoice has "total", "invoice_number"
-  return invoice
+if invoice_data has "total", "invoice_number"
+  return invoice_data
 else
-  return flag_for_review with invoice
+  return flag_for_review with invoice_data
 ```
 
 2. **Retry until all required fields present:**
 ```
-let user = infer form_text
+let user_data = infer form_text
   expect user
   if result not has required retry 3
 
-if user has required
-  return save_user with user
+if user_data has required
+  return save_user with user_data
 else
-  return flag_for_review with user
+  return flag_for_review with user_data
 ```
 
 3. **Accept degraded quality after retries:**
 ```
-let invoice = infer text
+let invoice_data = infer text
   expect invoice
   if result not has "total", "invoice_number", "vendor" retry 2
 
 # After retries, accept minimum
-if invoice has "total", "invoice_number"
-  return invoice
+if invoice_data has "total", "invoice_number"
+  return invoice_data
 else
-  return flag_for_review with invoice
+  return flag_for_review with invoice_data
 ```
 
 ## Real-World Examples
@@ -1289,7 +1289,7 @@ define extract_invoice with invoice_pdf
   let text = read_file with invoice_pdf
     error return { error: "Cannot read PDF", file: invoice_pdf }
   
-  let invoice = infer text
+  let invoice_data = infer text
     expect invoice
     complexity 2
     fallback complexity 3
@@ -1297,10 +1297,10 @@ define extract_invoice with invoice_pdf
     if result not has "total", "invoice_number" retry 2
     error return { status: "needs_review", file: invoice_pdf }
   
-  if invoice has required and invoice.total > 0
-    return write_to_database with "invoices", invoice
+  if invoice_data has required and invoice_data.total > 0
+    return write_to_database with "invoices", invoice_data
   else
-    return { status: "needs_review", invoice: invoice }
+    return { status: "needs_review", invoice: invoice_data }
 ```
 
 ### Batch Processing with Circuit Breaker
@@ -1348,7 +1348,7 @@ define process_batch with pdf_paths
         errors = append with errors, { file: path, error: "read_failed" }
         continue
     
-    let invoice = infer text
+    let invoice_data = infer text
       expect types.invoice
       complexity 2
       fallback complexity 3
@@ -1358,8 +1358,8 @@ define process_batch with pdf_paths
         errors = append with errors, { file: path, error: "inference_failed" }
         continue
     
-    if invoice has required and invoice.total > 0
-      results = append with results, invoice
+    if invoice_data has required and invoice_data.total > 0
+      results = append with results, invoice_data
   
   return { results: results, errors: errors, processed: pdf_paths.length }
 ```

@@ -28,7 +28,7 @@ define extract_invoice with pdf_path
   let text = read_file with pdf_path
     error return { error: "Cannot read file", file: pdf_path }
   
-  let invoice = infer text
+  let invoice_data = infer text
     expect invoice
     complexity 2
     fallback complexity 3
@@ -36,10 +36,10 @@ define extract_invoice with pdf_path
     if result not has required retry 2
     error return { status: "needs_review", file: pdf_path }
   
-  if invoice.total > 0
-    return invoice
+  if invoice_data.total > 0
+    return invoice_data
   else
-    return { status: "invalid", invoice: invoice }
+    return { status: "invalid", invoice: invoice_data }
 ```
 
 ## Best For

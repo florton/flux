@@ -73,7 +73,7 @@ let category = infer email
 
 ### Extraction
 ```flux
-let invoice = infer pdf
+let invoice_data = infer pdf
   expect invoice
 ```
 
@@ -233,7 +233,7 @@ define extract with pdf
   let text = read_file with pdf
     error return { error: "Read failed", file: pdf }
   
-  let data = infer text
+  let invoice_data = infer text
     expect invoice
     complexity 2
     fallback complexity 3
@@ -241,10 +241,10 @@ define extract with pdf
     if result not has required retry 2
     error return { status: "needs_review", file: pdf }
   
-  if data.total > 0
-    return data
+  if invoice_data.total > 0
+    return invoice_data
   else
-    return { status: "invalid", data: data }
+    return { status: "invalid", data: invoice_data }
 ```
 
 ### Batch Classification with Resilience
