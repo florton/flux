@@ -1,6 +1,6 @@
 # Flux Programming Language
 
-A minimalist language proposal for AI orchestration and document intelligence.
+A minimalist typesafe language proposal for AI orchestration and document intelligence.
 
 ## Files
 
