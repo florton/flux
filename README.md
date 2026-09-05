@@ -1,63 +1,81 @@
-# Flux Programming Language
+# Flux
 
-A minimalist typesafe language proposal for AI orchestration and document intelligence.
+A proposal for making AI a real abstraction layer: push inference to **compile time**
+wherever the specification is knowable, and bound it where it cannot move.
 
 ## Files
 
-- **[LANGUAGE_DESIGN.md](LANGUAGE_DESIGN.md)** - Complete language specification
-- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick syntax reference for developers
+- **[DESIGN_V3.md](DESIGN_V3.md)** - **Current proposal.** TypeScript library with a
+  compile-time synthesis step
+- **[LANGUAGE_DESIGN_V2.md](LANGUAGE_DESIGN_V2.md)** - Standalone-language form, retained
+  for reference. Same design decisions, different delivery vehicle
+- **[LANGUAGE_DESIGN.md](LANGUAGE_DESIGN.md)** - Original v1 language specification
+- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - v1 syntax reference
 
-## Overview
+## The idea
 
-Flux is designed for building AI-powered applications with:
-- AI as a first-class primitive (`infer` keyword)
-- Built-in resilience (circuit breakers, fallbacks)
-- Type-safe AI outputs
-- Cost awareness (batching, complexity controls)
-- Production-ready error handling
+An abstraction layer has to be a *function*. `compile(source) -> binary` qualifies,
+because it is reproducible. `llm(prompt) -> output` is a *distribution*, which is why
+"AI is just another abstraction layer" rings false.
 
-## Quick Example
+So Flux splits work into three tiers by what each can guarantee:
 
-```flux
-define invoice as
-  invoice_number text
-  vendor text
-  total number
+| Tier | Model runs | Guarantee | Runtime cost |
+|---|---|---|---|
+| plain TypeScript | never | deterministic | free |
+| `derive` | at **build**, once | deterministic after build | free |
+| `infer` | at **runtime**, per record | bounded, typed, observable | metered |
 
-define extract_invoice with pdf_path
-  let text = read_file with pdf_path
-    error return { error: "Cannot read file", file: pdf_path }
-  
-  let invoice_data = infer text
-    expect invoice
-    complexity 2
-    fallback complexity 3
-    circuit 5
-    if result not has required retry 2
-    error return { status: "needs_review", file: pdf_path }
-  
-  if invoice_data.total > 0
-    return invoice_data
-  else
-    return { status: "invalid", invoice: invoice_data }
+`derive` is the new part. You write a specification; a model writes the
+implementation once at build time; the result is verified, hash-pinned, committed,
+and reviewed like any other code. At runtime it is ordinary TypeScript - no model in
+the hot path, identical output on every run.
+
+```
+derive parseDuration(s: string) -> Seconds | Malformed
+
+  examples
+    "1h30m" => 5400
+    ""      => Malformed
+
+  rule round-trip
+    given any d: Seconds where d > 0
+    when  parseDuration(formatDuration(d))
+    then  result == d
 ```
 
-## Best For
+The compiler then reports what the model chose and you didn't - the constants and
+comparators your specification left open - so underspecification surfaces before it
+ships.
+
+## Best for
 
 - Document intelligence pipelines
-- Content classification at scale
-- Intelligent customer service routing
 - Data extraction from unstructured sources
-- Multi-modal content processing
+- Content classification at scale
+- Any high-volume workload where cost, provenance, and resumability matter
 
-## Philosophy
+## Principles
 
-- **13 keywords** - Minimal syntax, maximum clarity
-- **AI-first design** - LLMs are first-class primitives
-- **Batteries included** - ~40 stdlib functions
-- **Cost aware** - Explicit batching and complexity controls
-- **Production ready** - Circuit breakers, fallbacks, graceful degradation
+- **Specifications, not plans** - a plan is prose that nothing verifies; a spec executes
+- **The ratchet** - counterexamples, pinned bodies, and journals accumulate; nothing regresses
+- **Review intent, not mechanism** - the spec diff is short and human; the body diff is generated
+- **The body is the artifact** - a frozen derive never calls a model again, so deprecation costs nothing
+- **Metered, not guessed** - the runtime meter is the budget guarantee; static analysis is the estimate
 
 ## Status
 
-Language design phase. See LANGUAGE_DESIGN.md for complete specification.
+Design phase. See **[DESIGN_V3.md](DESIGN_V3.md)** for the current proposal.
+
+The design has moved through three forms:
+
+- **v1** — a standalone language with `infer` as the central runtime primitive
+- **v2** — three determinism tiers (`func` / `derive` / `infer`), moving inference
+  to compile time wherever the specification is knowable
+- **v3** — the same three tiers delivered as a TypeScript library with a
+  compile-time transformer, trading syntactic enforcement for ecosystem, tooling,
+  and incremental adoption
+
+Nothing is built yet. Everything rests on one unmeasured assumption — that writing
+a specification is genuinely less work than writing the code — and DESIGN_V3.md
+closes with the experiment that settles it.
