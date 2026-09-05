@@ -1,8 +1,8 @@
 # Flux v3 — A TypeScript Library With a Compile-Time Synthesis Step
 
-> **Status:** proposal. Supersedes [LANGUAGE_DESIGN_V2.md](LANGUAGE_DESIGN_V2.md),
-> which is retained as the reference for the standalone-language form.
-> v3 keeps every design decision from v2 and changes only the delivery vehicle.
+> **Status:** proposal. This document is the current design in full; nothing here
+> depends on reading an earlier one. [LANGUAGE_DESIGN_V2.md](LANGUAGE_DESIGN_V2.md)
+> is retained as the reference for the standalone-language form.
 
 ---
 
@@ -63,11 +63,8 @@ feature, is the thing worth building.
 
 ## Why a library and not a language
 
-v2 argued that whole-program cost analysis required owning the language, since
-you cannot bound call counts in a Turing-complete host. That argument was too
-strong, and the correction changes the recommendation.
-
-A **builder API** gives you a static graph inside a dynamic host:
+Whole-program cost analysis does not require owning the language. A **builder API**
+gives you a static graph inside a dynamic host:
 
 ```ts
 pipeline()
@@ -100,6 +97,37 @@ buyer is paying specifically because no model call can escape the audit trail. I
 is not the right answer for reaching people. The spec format designed here
 becomes that language's syntax if it is ever needed; nothing is wasted.
 
+### Why TypeScript
+
+**Decided: TypeScript, both tiers.** One question settles it, and it is neither
+audience nor terseness: **does the host have a build phase you can own?** TypeScript does, and `ts-patch` is the
+hook. Python does not — you would need an import hook or an out-of-band codegen
+step, which is the bespoke tool this design rejects everywhere else.
+
+The tiers split cleanly on that question:
+
+| Tier | Portable to Python? |
+|---|---|
+| 2 — `infer` | **yes, easily.** It is an ordinary runtime library. pydantic is already `type({...})`, Hypothesis is already fast-check |
+| 1 — `derive` | **not without a build phase**, and the build phase *is* the determinism claim |
+
+**On verbosity.** The objection is that TypeScript is already a heavy way to write
+anything, so putting another layer over it is self-defeating. But Flux does not add
+a layer above TypeScript. It **removes a function body** and puts a specification in
+its place. The TypeScript you write is strictly less than you would have written,
+not more — and the part that disappears is the part with the bugs in it.
+
+Where the complaint is fair is Tier 2: type declarations and hand-written
+arbitraries are genuinely verbose. Both shrink for the same reason — **deriving an
+arbitrary from a declared type is already listed below as work that is ours**, and a
+declared type that infers its TypeScript type is written once instead of twice. If
+that does not land, the objection stands and is unaddressed.
+
+Python is therefore not a target. Keeping the backend seam clean stays worth the
+small cost of not hard-coding emit assumptions, but nothing in this document is
+designed around a second backend arriving, and shipping Tier 2 separately in Python
+is explicitly not the plan.
+
 ---
 
 ## Architecture
@@ -108,16 +136,35 @@ becomes that language's syntax if it is ever needed; nothing is wasted.
 my-project/
 ├── src/
 │   ├── shipping.ts            # your code — plain TypeScript
-│   └── shipping.rules         # your specs — human-readable
+│   ├── shipping.rules         # your spec — prose, human-owned
+│   └── shipping.test.ts       # your tests, including executable rules
+├── fixtures/
+│   └── shipping.jsonl         # real corpus + every counterexample ever found
 ├── derived/
 │   ├── shippingTier.ts        # generated body — committed, reviewed
-│   ├── shippingTier.notes.md  # open decisions — generated
 │   └── shippingTier.journal   # synthesis history — append-only
-├── fixtures/
-│   └── shipping.jsonl         # real-world corpus + found counterexamples
 ├── flux.lock                  # pins: spec hash, body hash, model, corpus
 └── llms.txt                   # generated: how to review this codebase
 ```
+
+**Three things you author, and one of them is a file you already have.** File types
+are a tax paid by every reader of the repo, so the count is held down deliberately:
+
+| You author | Generated |
+|---|---|
+| `.ts` — code, tests, executable rules, generators | `derived/*.ts` — one body per derive |
+| `.rules` — the prose spec | `derived/*.journal` — append-only history |
+| `fixtures/*.jsonl` — corpus rows | `flux.lock`, `llms.txt` |
+
+There is **no `.rules.ts` file type**. An executable rule is a `rule()` call the
+transformer finds wherever you already keep tests, and a generator is an
+`Arbitrary<T>` exported from anywhere. Nothing is gained by giving either its own
+extension, and a project with six naming conventions is a project nobody adopts
+incrementally.
+
+The open-decisions report is likewise **output of `flux check`, not a committed
+file.** It is derivable from the spec and the body, and a derivable file checked
+into a repo is a file that goes stale.
 
 ### Direction of flow
 
@@ -125,7 +172,7 @@ The spec is the source. The TypeScript is the artifact.
 
 ```
   src/*.rules          authored by humans          INPUT
-  src/*.rules.ts       property tests              INPUT
+  src/*.test.ts        executable rules            INPUT
         |
         |  flux derive        model runs, once, at build time
         v
@@ -158,11 +205,10 @@ TypeScript, permanently, and the spec stops governing it.
 
 | Path | Author | Notes |
 |---|---|---|
-| `src/*.ts` | **you** | Tier 0 — pipeline logic, control flow, glue, I/O. The bulk of any real program. Never generated, never seen by a model. |
+| `src/*.ts` | **you** | Tier 0 — logic, control flow, glue, I/O, tests, executable rules, generators. The bulk of any real program. Never generated, never seen by a model. |
 | `src/*.rules` | **you** | the spec |
-| `src/*.rules.ts` | **you** | property tests (fast-check) |
-| `fixtures/*.gen.ts` | **you** | generators and constructors, unless you opt into synthesizing one |
-| `derived/*.ts` | **generated** | one file per `derive`, reviewed and committed |
+| `fixtures/*.jsonl` | **you, then the ratchet** | rows you supply, plus every counterexample ever found |
+| `derived/*` | **generated** | one body per `derive`, reviewed and committed |
 
 **`derive` is opt-in, per function.** A project with zero derives is a TypeScript
 project using a pipeline library, and that is a legitimate way to use this. You
@@ -197,9 +243,8 @@ with **zero API calls**, offline, reproducibly. This is `npm ci` versus
 ### The transformer
 
 Synthesis and analysis hook in as a TypeScript compile-time transformer
-(`ts-patch`), with `ts-morph` for AST work. This is the piece that makes the
-library form nearly as strong as the language: TypeScript **does** have a build
-phase you can own — the claim in v2 that it did not was wrong.
+(`ts-patch`), with `ts-morph` for AST work. TypeScript has a build phase you can own, and owning it is what makes the library
+form nearly as strong as the language.
 
 The transformer:
 
@@ -221,9 +266,9 @@ Steps 2–5 require no network. Only `flux derive` does.
 | 1 | `derive` | at **build**, once | deterministic after build | free |
 | 2 | `infer` | at **runtime**, per record | bounded, typed, observable | metered |
 
-The goal of any Flux program is to **push work down the tiers**. Tier 2 is the
-escape hatch for genuinely unstructured input, not the centerpiece — v1's mistake
-was making it the whole language, which is why it could not offer determinism.
+The goal of any Flux program is to **push work down the tiers**. Tier 2 is for
+genuinely unstructured input, not the centerpiece. A design in which everything is
+Tier 2 has no determinism to offer at all.
 
 ---
 
@@ -234,8 +279,8 @@ Ordinary code, ordinary tooling. Two constraints, both narrow.
 **No escape hatch to raw model SDKs.** This is deliberate and it raises the bar on
 the standard library: an escape hatch begs the question of why this is a library
 at all, while no escape hatch risks falling short of what real work demands.
-Resolution: ship a **lodash-scale** standard library rather than v1's ~40
-functions.
+Resolution: ship a **lodash-scale** standard library, not the few dozen functions
+a minimal one would carry.
 
 The stdlib is a **cost lever, not a convenience.** Every operation available in
 Tier 0 is one nobody pays a model for. A rich stdlib directly shrinks Tier-2
@@ -272,32 +317,31 @@ verbs that clauses may use.
 Inline examples are the ones a human pinned deliberately and read as
 documentation. File-sourced examples are the corpus. Both feed `spec_hash`.
 
-> **Resolved:** specs live in `.rules` files. A separate file type costs a small
+> **Why a separate file type.** A `.rules` file costs a small
 > parser and slightly worse error locations than tagged template literals inside
 > `.ts` would give, and buys the thing that matters more: **a domain expert who
 > does not write TypeScript owns the spec end to end.** That is not a nicety. The
 > spec is what the ratchet accumulates into, and if only programmers can touch it,
 > it decays into a second copy of the code.
 
-### One register, and an escape that is not a register
+### TypeScript is the foundation; `.rules` is a layer on top
 
-`.rules` files hold **prose only**. There is no expression register.
+TypeScript is not an escape hatch from the spec. It is the substrate. Everything
+that executes is TypeScript — Tier 0 code, synthesized bodies, generators,
+executable rules — and `.rules` earns a file type of its own by adding exactly one
+thing on top: **a form of specification a domain expert can own end to end.**
 
-An earlier draft put a `code rule` clause in the same file for rules prose could
-not reach. That was wrong twice over. It broke the only reason `.rules` exists as
-a file type — that a domain expert owns it end to end — and it required Flux to
-carry an expression parser: precedence, calls, type annotations, effectively a
-small TypeScript. That parser would have produced worse error spans than `tsc`,
-with no go-to-definition, no rename, and no typechecking, in exchange for
-co-location.
+A rule therefore has two forms, and neither is a fallback from the other:
 
-The escape already exists and is already committed to. **A rule that needs real
-computation is a property test**, and the previous section decided not to reinvent
-property testing. So it is a fast-check property in a `.ts` file, discovered and
-hashed by the transformer exactly like a prose clause:
+| Form | Lives in | Author | Why it exists |
+|---|---|---|---|
+| **executable rule** | any `.ts` | programmers | arbitrary computation, no vocabulary needed. The base case |
+| **prose rule** | `.rules` | anyone who knows the domain | the spec must not be programmer-only, or it decays into a second copy of the code |
+
+An executable rule is a fast-check property, discovered and hashed by the
+transformer exactly like a prose clause:
 
 ```ts
-// src/duration.rules.ts
 import { rule } from "flux"
 import * as fc from "fast-check"
 import { parseDuration, formatDuration } from "./duration"
@@ -308,12 +352,17 @@ rule("round-trip", fc.integer({ min: 1 }), (d) =>
 ```
 
 It contributes to `spec_hash`, appears in the same verification report, and its
-counterexamples enter the same corpus. Nothing about the ratchet changes. What
-changes is that expression-shaped things live where expressions already have
-tooling.
+counterexamples enter the same corpus.
 
-The register itself: closed vocabulary, no parentheses, no operators. A
-non-programmer writes and reviews this:
+**`.rules` holds prose only** — there is no expression register in it. An expression
+parser there would mean precedence, calls and type annotations, which is a small
+TypeScript with worse error spans than `tsc`, no go-to-definition, no rename and no
+typechecking, bought in exchange for co-location.
+
+### The prose form
+
+Closed vocabulary, no parentheses, no operators. A non-programmer writes and reviews
+this:
 
 ```
 derive shippingTier
@@ -367,6 +416,37 @@ example-shaped statements — relational rules are the reason it earns its place
 Quantifiers: `a` for an example, `any` for a rule, `any two ... where ...` for a
 relational rule. Clause keywords: `example`, `rule`, and `note`.
 
+### You do not have to know the vocabulary to write a rule
+
+The table above constrains what the **verifier accepts**, not what you **type**.
+Those are different problems, and conflating them would hand the spec file back to
+programmers by another route — anyone who has to remember that it is `is above` and
+not `is greater than` is reading a manual, and a domain expert reading a manual is a
+domain expert who stops contributing.
+
+So **authoring is loose and storage is canonical**, exactly the way a code formatter
+works:
+
+1. Write the rule however it comes out. *"heavier than 5 kg should never come back
+   as Standard."*
+2. `flux fmt` snaps it to canonical form. Most of this is deterministic — a synonym
+   table, unit normalization, fuzzy match against the vocabulary and the names the
+   header bound.
+3. What the table cannot resolve is offered as a **suggested rewrite** in the editor,
+   accepted or rejected as an ordinary code action. That suggestion may come from a
+   model. It is author-time only: `flux build` and `flux verify` still never call one.
+4. What genuinely cannot be said in the vocabulary stays a `note`, and is counted as
+   one.
+
+The file on disk always holds canonical clauses, so `spec_hash`, the verifier, the
+diff and the review are unchanged. What changes is that contributing a rule no
+longer requires memorizing a table.
+
+**The rule that keeps this honest: a rewrite is never applied silently.** A model
+guessing "you probably meant `is above 5000`" and guessing wrong is the same class of
+failure as a model in the oracle — it quietly changes what the spec says — unless a
+human reads the diff. Suggested, shown, accepted. Never inferred at build time.
+
 **What `.rules` contains, precisely:** prose clauses, and literal example tables.
 Literals are not expressions — no operators, no calls, no precedence — so the
 tabular form survives without reintroducing a parser:
@@ -391,7 +471,7 @@ derive parseDuration
 
 That last clause is the round-trip rule, in prose. It works because `uses` binds a
 verb to an existing function, and `when` composes declared operations. **Relational
-rules are not the boundary between the two worlds** — the boundary is arbitrary
+rules are not the boundary between the two forms** — the boundary is arbitrary
 computation in `then`, which is rarer than it first appears.
 
 ### Where the line actually falls
@@ -406,7 +486,7 @@ Prose covers most of what constrains synthesis, which is the point — the stron
 class of rule must not be a programmer-only privilege, or the domain expert is left
 writing examples while someone else writes the constraints that actually matter.
 
-**The failure mode to watch:** if the `.ts` escape is too comfortable, programmers
+**The failure mode to watch:** if executable rules are too comfortable, programmers
 skip prose, `.rules` becomes a file only non-programmers touch, and it rots. The
 counter-pressure is a **lint warning, escalatable to an error in config** — a
 derive carrying property tests and no prose rules warns by default, and a team that
@@ -416,7 +496,7 @@ to ignore than the other.
 
 #### Neither source has precedence over the other
 
-`.rules` and property tests are **both inputs**. Neither is generated from the
+Prose rules and executable rules are **both inputs**. Neither is generated from the
 other, and there is no precedence order between them, because precedence would mean
 silently discarding a constraint someone wrote — which is the rot failure above,
 mechanised.
@@ -440,7 +520,7 @@ reporting. Two kinds:
 Both are reported. A rule nobody can fail is a rule nobody should trust, and the
 machinery to find them already exists for another purpose.
 
-### Registers do not exist outside `.rules`
+### Prose does not exist outside `.rules`
 
 Tier 0 code is plain TypeScript. The synthesized body in `derived/` is plain
 TypeScript. Fixtures are data. Generators are `Arbitrary<T>`. Property rules are
@@ -485,14 +565,14 @@ they are **excluded from every rule count.** An LSP code action offers to promot
 note to a checked rule when the vocabulary can express it, which is the ratchet
 applied to the spec file itself.
 
-**One correction on the reasoning.** A model reads the spec at `derive` time, not
-at execution. At runtime nothing reads it — the pinned body runs, and that is the
-whole determinism claim. The vocabulary exists for the **verifier**, not for the
-model; the model would happily read anything.
+**Who the vocabulary is for.** The **verifier**, not the model — a model would
+happily read anything. And the model reads the spec at `derive` time, never at
+execution: at runtime nothing reads it, the pinned body runs, and that is the whole
+determinism claim.
 
 ### Parsing guarantees
 
-The register question is settled by a keyword, and so is this one:
+Three properties, which together make a silent misparse impossible:
 
 1. **`note` is explicit.** A clause written as `rule` that fails to parse is a hard
    error with a suggestion and a code action, never silently demoted to a note.
@@ -603,7 +683,7 @@ error: rules over Booking need a value source
          nights == daysBetween(checkIn, checkOut)      booking.rules:14
        supply either:
          fixtures/booking.jsonl       (>= 50 rows)  -- preferred
-         fixtures/booking.gen.ts      (Arbitrary<Booking>)
+         an exported Arbitrary<Booking>              (any .ts file)
 ```
 
 #### The ladder is a ratio, not a choice
@@ -628,8 +708,8 @@ rules 3/3 ✓   420 constructed · 1,180 corpus · 47 regression · seed 0x7f3a
 
 **Fixtures are still preferred where they exist**, for two reasons that do not
 weaken: reality satisfies invariants by construction, and it carries no tautology
-risk because reality wrote it. What changes is the recognition that "prefer
-fixtures" is unimplementable advice for a project that has none.
+risk because reality wrote it. The weighting exists because "prefer fixtures" is
+unimplementable advice for a project that has none.
 
 **When is a corpus dense enough?** Not a constant, and not a guess. It scales with
 field count and body branchiness — three fields and two branches may need 50 rows;
@@ -669,7 +749,6 @@ rules are load-bearing and which are decorative.
 
 When a rule fails at `weight = 8347`, the counterexample worth keeping is `5001`.
 
-An earlier draft called invariant-preserving shrinking unsolved. That overstated it.
 The mathematics is clean once a constructor is written in terms of free parameters:
 **never shrink the constructed value — shrink its preimage and re-run the
 constructor.** Shrink `(checkIn, nights)`, both primitives, both trivially
@@ -677,8 +756,7 @@ shrinkable, and every intermediate candidate satisfies the invariant *because it
 constructed*. This is the second reason to prefer construction over filtering, and
 it is why the ladder is ordered as it is.
 
-The honest residue is far smaller than the original claim: preimage shrinking gives
-*useful* results only when the constructor is roughly continuous in its parameters.
+The honest residue: preimage shrinking gives *useful* results only when the constructor is roughly continuous in its parameters.
 A constructor that hashes its input yields shrinks that are valid but not smaller.
 That degrades to "no shrink" — unhelpful, never unsound.
 
@@ -748,6 +826,50 @@ your spec gets **wrong**. A confidently incorrect example produces confidently
 incorrect code with zero open decisions. And where enumerating behavior
 approaches the complexity of implementing it, no analysis rescues the tier —
 write the function. That boundary is real.
+
+#### Two derives, one decision
+
+One file per derive is the **unit of pinning**: a body is hashed, reviewed,
+resynthesized and detached as a whole, and a derive split across files leaves
+nothing coherent to pin. That granularity is not negotiable, but its cost is real
+and it is not the one usually named.
+
+The cost is not that a derive cannot be large enough. It is that **two derives
+depending on the same quantity will each invent it, and they will not agree.**
+`shippingTier` picks 1000 g, `shippingCost` picks 1100 g, both pass all their own
+examples, both report zero open decisions, and the inconsistency reaches production
+without ever failing a rule. Neither body is wrong on its own terms. The system is
+wrong.
+
+So shared quantities are **named in the spec and pinned once**:
+
+```
+domain shipping
+  value heavyThreshold   a whole number of grams
+
+derive shippingTier
+  takes weight   a whole number of grams
+  gives tier     one of: Standard, Heavy, Freight
+  uses  heavyThreshold
+  ...
+
+derive shippingCost
+  takes weight   a whole number of grams
+  gives cost     an amount in cents
+  uses  heavyThreshold
+  ...
+```
+
+`heavyThreshold` becomes **one open decision reported once**, and the interval it
+reports is the *intersection* of what every derive using it permits — which is
+strictly more informative than either derive alone, because a constraint stated in
+one spec now narrows the other. Pinning it is a single edit that invalidates every
+body reading it.
+
+The general rule follows: **anything two derives both need is hoisted — into a named
+value, a Tier-0 function, or its own derive — and never synthesized twice.** A
+helper duplicated across two derived files is a lint error, because two copies of a
+formula are two formulas, and only one of them will get fixed.
 
 ### Authoring: files, diagnostics, code actions
 
@@ -1064,6 +1186,28 @@ mechanism matches.*
 
 ---
 
+## Rejected alternatives
+
+Kept short deliberately: each of these was considered and closed, and the reasoning
+lives in the section named beside it. They are listed so a reader does not have to
+rediscover them, not to narrate how the design got here.
+
+| Rejected | Instead | Where |
+|---|---|---|
+| an expression register inside `.rules` | executable rules in `.ts` | *TypeScript is the foundation* |
+| Gherkin step definitions | vocabulary fixed by the language | *Spec syntax* |
+| an escape hatch to raw model SDKs | lodash-scale stdlib as a cost lever | *Tier 0* |
+| `.gitignore`-ing `derived/` | always commit, mark `linguist-generated` | *Workflow decisions* |
+| model ids in environment variables | versioned lockfile | *Model profiles, pinned* |
+| consecutive-failure circuit breakers | rate-over-window | *Concurrency, circuits, batching* |
+| positional matching of packed results | correlation ids, individual quarantine | *Concurrency, circuits, batching* |
+| a spec-coverage percentage | open decisions with intervals | *Open decisions* |
+| an interactive CLI workbench | files, diagnostics, code actions | *Authoring* |
+| scheduled re-verification in the library | a command and an exit code | *How rules are checked* |
+| a model deciding whether a counterexample is valid | a model nominating, code adjudicating | *Shrinking* |
+
+---
+
 ## Open questions
 
 1. **Prose coverage, and note drift.** How often does a real spec fall out of the
@@ -1079,12 +1223,10 @@ mechanism matches.*
    unnoticed because almost nothing runs it?
 4. **The compiler's own host language.** TypeScript for cohesion, or Rust for the
    AST-heavy analysis work. Independent of the emit target.
-5. **Additional backends.** TypeScript is the target; keep a clean backend seam so
-   Python or R stay possible without a rewrite. Cheap now, expensive to retrofit.
-6. **Synthesis is bounded by spec tightness.** Open-decision analysis finds what a
+5. **Synthesis is bounded by spec tightness.** Open-decision analysis finds what a
    spec leaves *unconstrained*, never what it gets *wrong*. There is no mechanical
    answer — only review of the generated body. This is the central risk.
-7. **Tier 1 may not carry its weight.** If `derive` pays off only for a narrow band
+6. **Tier 1 may not carry its weight.** If `derive` pays off only for a narrow band
    of problems, v3 reduces to a good pipeline library. Untested.
 
 ---
@@ -1092,21 +1234,66 @@ mechanism matches.*
 ## The viability experiment
 
 Everything above rests on one unmeasured assumption: **that writing a spec is
-genuinely less work than writing the code.** For `parseDuration`, five examples
-and two rules beat a real duration parser easily. There is also a category where
-pinning behavior takes more effort than implementing it — and nobody knows which
-category most real functions fall into.
+genuinely less work than writing the code.** For `parseDuration`, five examples and
+two rules beat a real duration parser easily. There is also a category where pinning
+behavior takes more effort than implementing it, and nobody knows which category
+most real functions fall into.
 
-This is testable without building anything:
+### A free ceiling: LeetCode
 
-1. Take 20 real utility functions from an existing codebase.
-2. For each, write only the spec — without looking at the implementation.
-3. Synthesize.
-4. Check against the real implementation and its existing tests.
-5. Score two things: did it pass, and was the spec meaningfully shorter?
+Before hand-writing a single spec there is a corpus that already has the shape of
+the experiment. A LeetCode problem is a statement written without reference to any
+particular solution, carrying worked examples and explicit constraints — which is
+very nearly a `.rules` file already — paired with thousands of accepted
+implementations. **Statement length against solution length is a scrape and an
+afternoon, and it produces a number today.**
+
+It is a **ceiling, not a sample.** Those statements are unusually complete because a
+paid editor wrote them and ambiguity is a filed bug; a Jira ticket is not that, and
+a conversation with a stakeholder is much less that. So an unfavorable ratio there
+kills the thesis outright, while a favorable one bounds the best case and says
+nothing about the median. Worth running first precisely because it is the cheapest
+way to be told no.
+
+### The baseline set
+
+The real measurement needs concrete functions **chosen before any specs are
+written**, so the result cannot be selected after the fact. A starting set, with the
+prediction recorded in advance so the scoring is honest:
+
+| Function | Spec shape | Predicted |
+|---|---|---|
+| `parseDuration("1h30m")` | ~6 examples, round-trip rule | favorable |
+| `formatBytes(n)` | ~6 examples, monotonicity | favorable |
+| `slugify(s)` | ~8 examples, idempotence, charset rule | favorable |
+| `compareSemver(a, b)` | examples, total-order rules | favorable |
+| `shippingTier(g)` | examples; the constants **are** the content | favorable |
+| `truncateWords(s, n)` | examples, length bound, prefix rule | favorable |
+| `binarySearch(sorted, x)` | postcondition in one line | favorable |
+| `topologicalSort(graph)` | every edge points forward; output is a permutation of input | favorable |
+| `normalizePhone(s)` | examples plus a format; regex generation is weak here | uncertain |
+| `csvParse(s)` (RFC 4180) | the spec is the RFC — long, but it already exists | uncertain |
+| `deepMerge(a, b)` | spec approaches the implementation in size | unfavorable |
+| `debounce(fn, ms)` | quantifies over functions and over time | unfavorable |
+
+Then, per function: write only the spec without looking at the implementation,
+synthesize, check against the real implementation and its existing tests, and score
+two things — **did it pass**, and **was the spec meaningfully shorter.**
 
 - **≥12/20** → Tier 1 is real; the architecture above is worth building.
 - **~5/20** → `derive` is a useful tool, not a tier. Ship the Tier-2 runtime alone.
 - **≤3/20** → the thesis is wrong, and it cost an afternoon to find out.
+
+### What the set already predicts
+
+`binarySearch` and `topologicalSort` are algorithms, and they sit near the top of
+the list rather than the bottom, because their acceptance criteria are one line
+while their implementations are fiddly enough to have famous bugs. So the boundary
+is **not** algorithmic versus business logic. It is whether **the acceptance criteria
+are shorter than the mechanism**, which is a different cut through the same set.
+
+The word carrying the weight in "not for novel algorithms" is therefore *novel*: you
+cannot specify what you cannot yet characterize. A textbook algorithm is the exact
+opposite of novel, and may be among the best cases there is.
 
 Every other question in this document is downstream of that number.
