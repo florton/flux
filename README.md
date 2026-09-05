@@ -32,17 +32,22 @@ and reviewed like any other code. At runtime it is ordinary TypeScript - no mode
 the hot path, identical output on every run.
 
 ```
-derive parseDuration(s: string) -> Seconds | Malformed
+derive parseDuration
+  takes  text     a duration written like "1h30m"
+  gives  seconds  a whole number of seconds, or Malformed
+  uses   formatDuration  as "formatted"
 
   examples
     "1h30m" => 5400
     ""      => Malformed
 
-  rule round-trip
-    given any d: Seconds where d > 0
-    when  parseDuration(formatDuration(d))
-    then  result == d
+  rule  given any seconds above zero
+        when  formatted and then parsed
+        then  the result is the same as the original
 ```
+
+Specifications are plain structured English, so the person who owns the domain can
+write and review them without writing TypeScript.
 
 The compiler then reports what the model chose and you didn't - the constants and
 comparators your specification left open - so underspecification surfaces before it
@@ -50,10 +55,33 @@ ships.
 
 ## Best for
 
+**`derive`** — where stating the rule is less work than writing the code:
+
+- Parsers and normalizers for messy real-world formats: durations, addresses,
+  units, dates in forty variations
+- Classification and bracketing where the shape is obvious and the *constants* are
+  the real content: shipping tiers, risk bands, pricing brackets
+- Business rules that change often and must be auditable: eligibility, tax bands,
+  thresholds — a domain expert edits the spec and a programmer stops being the
+  bottleneck
+- Schema migration and adapter code, where examples are natural and the
+  implementation is a long tail of tedium
+
+**`infer`** — where the input is genuinely unstructured:
+
 - Document intelligence pipelines
 - Data extraction from unstructured sources
 - Content classification at scale
 - Any high-volume workload where cost, provenance, and resumability matter
+
+## Not for
+
+- Work where the specification is as long as the implementation — most CRUD, most glue
+- Novel algorithms; you cannot specify what you cannot yet characterize
+- Hot paths needing hand-tuned performance — a synthesized body optimizes for
+  passing its rules, not for speed
+- Anything whose acceptance criteria you cannot state, which is the general form of
+  the other three
 
 ## Principles
 
