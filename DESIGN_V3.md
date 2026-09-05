@@ -119,6 +119,68 @@ my-project/
 └── llms.txt                   # generated: how to review this codebase
 ```
 
+### Direction of flow
+
+The spec is the source. The TypeScript is the artifact.
+
+```
+  src/*.rules          authored by humans          INPUT
+  src/*.rules.ts       property tests              INPUT
+        |
+        |  flux derive        model runs, once, at build time
+        v
+  derived/*.ts         synthesized body            OUTPUT
+                       reviewed, hash-pinned, committed
+        |
+        |  flux build         no model, ever
+        |  flux verify        no model, ever
+        v
+      runtime          the pinned body runs        OUTPUT
+```
+
+Nothing reads a spec at runtime. Nothing calls a model after `flux derive`. The
+`.rules` file is never generated — it is the thing a human writes and keeps
+editing, and it is what the ratchet accumulates into.
+
+**The opposite direction is a different tool.** Reading existing TypeScript and
+proposing a spec for it is *extraction*, and it is genuinely useful — it is how you
+adopt Flux in a codebase that already exists, and it is step 2 of the viability
+experiment run backwards. But it is a migration aid, not the pipeline. A spec
+extracted from code inherits whatever that code already gets wrong, so it must be
+reviewed as a proposal rather than trusted as a specification.
+
+`flux detach` is the one place the arrow terminates: a derived body becomes ordinary
+TypeScript, permanently, and the spec stops governing it.
+
+### Who writes the TypeScript
+
+**You do, almost all of it.** Exactly one directory is generated:
+
+| Path | Author | Notes |
+|---|---|---|
+| `src/*.ts` | **you** | Tier 0 — pipeline logic, control flow, glue, I/O. The bulk of any real program. Never generated, never seen by a model. |
+| `src/*.rules` | **you** | the spec |
+| `src/*.rules.ts` | **you** | property tests (fast-check) |
+| `fixtures/*.gen.ts` | **you** | generators and constructors, unless you opt into synthesizing one |
+| `derived/*.ts` | **generated** | one file per `derive`, reviewed and committed |
+
+**`derive` is opt-in, per function.** A project with zero derives is a TypeScript
+project using a pipeline library, and that is a legitimate way to use this. You
+reach for a derive where writing the spec is genuinely less work than writing the
+code — a judgment made function by function, and the thing the viability experiment
+is trying to measure.
+
+This ratio is not incidental, it is load-bearing. **The review story only works if
+generated code is a small, concentrated minority of the codebase.** Nobody reviews
+50,000 lines of synthesized TypeScript, and "you can inspect the exact logic before
+it ships" — the entire enterprise argument — is false the moment synthesis is the
+default rather than the exception.
+
+And nothing is one-way except by choice: `flux detach` converts any derived body
+into ordinary TypeScript you own outright. Editing a pinned body without detaching
+fails the build rather than silently drifting, so taking ownership is deliberate,
+but it is always available.
+
 Four commands:
 
 | Command | Calls a model? | Purpose |
@@ -200,26 +262,120 @@ reviewable TypeScript.
 ### Spec syntax
 
 Gherkin extended with one word. `a` introduces an example; **`any` introduces a
-rule.** Same shape, and the quantifier is the only difference:
-
-```
-derive shippingTier(weight_g: int) -> Tier
-
-  example  given a weight of 500 g
-           when  classified
-           then  the result is Standard
-
-  rule     given any weight greater than zero
-           when  classified
-           then  the result is Standard or Heavy
-```
+rule.** Same Given/When/Then shape, and the quantifier is the only difference.
 
 Gherkin's step-definition indirection is deliberately **not** adopted — it is the
-part every team that has lived with Cucumber complains about. `when` and `then`
-take real expressions:
+part every team that has lived with Cucumber complains about. There is no glue
+file: the vocabulary is fixed by the language, and the header binds the nouns and
+verbs that clauses may use.
+
+Inline examples are the ones a human pinned deliberately and read as
+documentation. File-sourced examples are the corpus. Both feed `spec_hash`.
+
+> **Resolved:** specs live in `.rules` files. A separate file type costs a small
+> parser and slightly worse error locations than tagged template literals inside
+> `.ts` would give, and buys the thing that matters more: **a domain expert who
+> does not write TypeScript owns the spec end to end.** That is not a nicety. The
+> spec is what the ratchet accumulates into, and if only programmers can touch it,
+> it decays into a second copy of the code.
+
+### One register, and an escape that is not a register
+
+`.rules` files hold **prose only**. There is no expression register.
+
+An earlier draft put a `code rule` clause in the same file for rules prose could
+not reach. That was wrong twice over. It broke the only reason `.rules` exists as
+a file type — that a domain expert owns it end to end — and it required Flux to
+carry an expression parser: precedence, calls, type annotations, effectively a
+small TypeScript. That parser would have produced worse error spans than `tsc`,
+with no go-to-definition, no rename, and no typechecking, in exchange for
+co-location.
+
+The escape already exists and is already committed to. **A rule that needs real
+computation is a property test**, and the previous section decided not to reinvent
+property testing. So it is a fast-check property in a `.ts` file, discovered and
+hashed by the transformer exactly like a prose clause:
+
+```ts
+// src/duration.rules.ts
+import { rule } from "flux"
+import * as fc from "fast-check"
+import { parseDuration, formatDuration } from "./duration"
+
+rule("round-trip", fc.integer({ min: 1 }), (d) =>
+  parseDuration(formatDuration(d)) === d
+)
+```
+
+It contributes to `spec_hash`, appears in the same verification report, and its
+counterexamples enter the same corpus. Nothing about the ratchet changes. What
+changes is that expression-shaped things live where expressions already have
+tooling.
+
+The register itself: closed vocabulary, no parentheses, no operators. A
+non-programmer writes and reviews this:
 
 ```
-derive parseDuration(s: string) -> Seconds | Malformed
+derive shippingTier
+  takes  weight   a whole number of grams
+  gives  tier     one of: Standard, Heavy, Freight
+
+  example  given a weight of 500
+           when  classified
+           then  the tier is Standard
+
+  example  given a weight of 5000
+           when  classified
+           then  the tier is Heavy
+
+  rule     given any weight of 1 or more
+           when  classified
+           then  the tier is one of Standard, Heavy, Freight
+
+  rule     given any weight above 5000
+           when  classified
+           then  the tier is not Standard
+
+  rule     given any two weights where the first is lighter than the second
+           when  both are classified
+           then  the first tier is not heavier than the second
+```
+
+The header is what makes the prose parseable. `takes` and `gives` bind the names
+`weight` and `tier`, so "the tier is Standard" resolves without ambiguity, and
+declaration order in `one of:` defines the ordering that "heavier than" uses. A
+programmer writes the header once; everything below it is open to anyone.
+
+That last rule is monotonicity, stated in English. Prose is not restricted to
+example-shaped statements — relational rules are the reason it earns its place.
+
+**The closed vocabulary.** Fixed by the language, not per project:
+
+| Phrase | Means |
+|---|---|
+| `is X` / `is not X` | equality, inequality |
+| `is one of X, Y, Z` | membership |
+| `is above N` / `is below N` | strict comparison |
+| `is at least N` / `is at most N` | inclusive comparison |
+| `is between N and M` | inclusive range |
+| `contains X` | substring or element |
+| `starts with X` / `ends with X` | string prefix, suffix |
+| `is empty` / `is missing` | emptiness, absence |
+| `looks like <format>` | a named format declared in the header |
+| `is the same as <name>` | round-trip and relational equality |
+
+Quantifiers: `a` for an example, `any` for a rule, `any two ... where ...` for a
+relational rule. Clause keywords: `example`, `rule`, and `note`.
+
+**What `.rules` contains, precisely:** prose clauses, and literal example tables.
+Literals are not expressions — no operators, no calls, no precedence — so the
+tabular form survives without reintroducing a parser:
+
+```
+derive parseDuration
+  takes  text      a duration written like "1h30m"
+  gives  seconds   a whole number of seconds, or Malformed
+  uses   formatDuration  as "formatted"
 
   examples
     "1h30m" => 5400
@@ -228,19 +384,134 @@ derive parseDuration(s: string) -> Seconds | Malformed
 
   examples from "fixtures/durations.jsonl"
 
-  rule round-trip
-    given any d: Seconds where d > 0
-    when  parseDuration(formatDuration(d))
-    then  result == d
+  rule  given any seconds above zero
+        when  formatted and then parsed
+        then  the result is the same as the original
 ```
 
-Inline examples are the ones a human pinned deliberately and read as
-documentation. File-sourced examples are the corpus. Both are part of `spec_hash`.
+That last clause is the round-trip rule, in prose. It works because `uses` binds a
+verb to an existing function, and `when` composes declared operations. **Relational
+rules are not the boundary between the two worlds** — the boundary is arbitrary
+computation in `then`, which is rarer than it first appears.
 
-> **Open:** whether specs live in `.rules` files (better readability, reviewable
-> by non-TypeScript readers, needs a small parser) or in tagged template literals
-> inside `.ts` (no new file type, worse error locations). This document assumes
-> `.rules`.
+### Where the line actually falls
+
+| Expressible in prose | Needs a property test |
+|---|---|
+| examples, including tabular and file-sourced | arbitrary computation in `then` |
+| single- and multi-field conditions | rules over types with no declared vocabulary |
+| relational rules over declared operations (round-trip, monotonicity, idempotence) | rules quantifying over functions rather than values |
+
+Prose covers most of what constrains synthesis, which is the point — the strongest
+class of rule must not be a programmer-only privilege, or the domain expert is left
+writing examples while someone else writes the constraints that actually matter.
+
+**The failure mode to watch:** if the `.ts` escape is too comfortable, programmers
+skip prose, `.rules` becomes a file only non-programmers touch, and it rots. The
+counter-pressure is a **lint warning, escalatable to an error in config** — a
+derive carrying property tests and no prose rules warns by default, and a team that
+cares sets it to error in CI. Enforcement is a team decision, not a language one.
+Both sources also appear in one report under one naming scheme, so neither is easier
+to ignore than the other.
+
+#### Neither source has precedence over the other
+
+`.rules` and property tests are **both inputs**. Neither is generated from the
+other, and there is no precedence order between them, because precedence would mean
+silently discarding a constraint someone wrote — which is the rot failure above,
+mechanised.
+
+Two situations get confused with each other here:
+
+**Contradiction is unsatisfiability, not a conflict to resolve.** If a prose rule
+and a property test cannot both hold, no body satisfies the spec, and synthesis
+fails naming both clauses and their file positions. This surfaces at `flux derive`,
+not at runtime — the contradiction is caught before a body exists, which is one of
+the better properties of pinning behavior before generating it.
+
+**A rule can be useless without contradicting anything**, and that is the case worth
+reporting. Two kinds:
+
+| Kind | Meaning | Detected by |
+|---|---|---|
+| vacuous | its `given` matched no generated or corpus value | sampling instrumentation |
+| dead | it passes against deliberately perturbed bodies | the open-decisions pass |
+
+Both are reported. A rule nobody can fail is a rule nobody should trust, and the
+machinery to find them already exists for another purpose.
+
+### Registers do not exist outside `.rules`
+
+Tier 0 code is plain TypeScript. The synthesized body in `derived/` is plain
+TypeScript. Fixtures are data. Generators are `Arbitrary<T>`. Property rules are
+fast-check. **No prose appears in any executable artifact**, and prose is not
+permitted to grow into a programming language — the moment a spec needs control
+flow it is a property test, or it is not a spec. When a derive is detached, nothing
+prose-shaped travels with it: the body was always TypeScript.
+
+### Checked clauses and notes
+
+Extended Gherkin is the preferred form, and **free plaintext is allowed** — but the
+distinction between them must be impossible to miss, because it is not cosmetic.
+
+A clause that parses against the vocabulary compiles to an executable predicate. It
+runs at `flux verify` with zero model calls, produces counterexamples, and feeds the
+ratchet. Free plaintext cannot do any of that. A model reads it at synthesis time
+and it genuinely influences the body — but it **never executes, never fails, and
+never enters the corpus.**
+
+That is the dangerous part. An unverifiable clause sitting in the same file, in the
+same shape, as a verified one is the green-check-that-means-nothing problem moved up
+into the spec. So plaintext is a different keyword:
+
+```
+  rule  given any weight above 5000
+        when  classified
+        then  the tier is not Standard
+
+  note  freight carriers in the EU treat pallets differently below 30 kg;
+        prefer the conservative classification when the origin is ambiguous
+```
+
+`note` is guidance to the synthesizer. `rule` is a constraint on the body. The
+report never conflates them:
+
+```
+rules 4/4 ✓   notes 2 (unverified, synthesis guidance only)
+```
+
+Notes are part of `spec_hash` — changing one changes the body it produced — and
+they are **excluded from every rule count.** An LSP code action offers to promote a
+note to a checked rule when the vocabulary can express it, which is the ratchet
+applied to the spec file itself.
+
+**One correction on the reasoning.** A model reads the spec at `derive` time, not
+at execution. At runtime nothing reads it — the pinned body runs, and that is the
+whole determinism claim. The vocabulary exists for the **verifier**, not for the
+model; the model would happily read anything.
+
+### Parsing guarantees
+
+The register question is settled by a keyword, and so is this one:
+
+1. **`note` is explicit.** A clause written as `rule` that fails to parse is a hard
+   error with a suggestion and a code action, never silently demoted to a note.
+2. **No expressions are admissible**, so there is nothing expression-shaped to
+   misread.
+3. **`flux fmt` canonicalizes before hashing**, so alignment and whitespace cannot
+   move `spec_hash`.
+
+**Division of labor:**
+
+| Who | Writes | Cannot |
+|---|---|---|
+| Programmer | the header (`takes` / `gives` / `uses`), named formats, property tests, generators | — |
+| Domain expert | examples, prose rules including relational ones, fixture rows | invent predicates, name types, bind verbs |
+
+The honest limit: a non-programmer can say a great deal but cannot invent
+vocabulary. That is Gherkin's trade minus the step-definition file — the vocabulary
+is fixed by the language, so there is no per-project glue layer to maintain and no
+indirection to chase.
 
 ### Why rules and not just examples
 
@@ -254,6 +525,13 @@ that instantly, because it must hold for values you never listed.
 Rules are what make synthesis *verified* rather than *fitted*. They are also what
 makes open-decision analysis meaningful: a surviving variant only tells you
 something if your rules were strong enough to have caught it.
+
+**Rules are not mandatory.** A derive with examples and no rules warns; it does not
+fail. Forcing a rule produces rules written to satisfy the compiler, and a spec
+gamed to pass is worth less than an honest one that admits it is thin. The
+open-decisions report already exposes exactly what an examples-only spec left free,
+which is the visibility that matters — the warning points at that report rather
+than blocking the build.
 
 ### How rules are checked
 
@@ -284,6 +562,144 @@ cases,"* never *"proven,"* and the tooling must not imply otherwise.
 Re-verification with a fresh seed is `flux verify --reseed`. It costs no model
 calls, since it only runs generated code. **Scheduling it is devops' job, not the
 library's** — Flux ships a command and an exit code, not a cron.
+
+### Generating values for rules
+
+A rule says *"for any X."* Something has to produce the X.
+
+**Flux does not build a generator framework.** Property-based generation is solved
+work — fast-check has boundary-biased arbitraries, composition, seeded replay, and
+shrinking; Hypothesis's `@composite` is the construct strategy already shipped. A
+user-written generator is an `Arbitrary<T>`, not a Flux DSL: nothing new to learn,
+existing skills transfer, and none of it is ours to maintain.
+
+Four things are genuinely ours, and none of them are generation:
+
+1. **Deriving an arbitrary from a declared type**, where that is mechanical.
+2. **Owning the corpus and the ratchet** — permanent counterexamples, fixtures as a
+   sampling source, the journal. No framework does this.
+3. **Detecting the tautology trap.** No framework does this either.
+4. **Deciding, mechanically, when the user must supply values.**
+
+#### Who supplies values: a decidable triage
+
+The split is not a policy or a judgment call. It is a property of the type, visible
+to the compiler:
+
+| Constraint shape | Who supplies | Why |
+|---|---|---|
+| primitives, enums, unions | **auto** | boundary catalogue applies directly |
+| single-field refinement (`int where x > 0`) | **auto** | bound is decidable from one field |
+| arrays, options, records of the above | **auto** | composes |
+| regex-matched string | **auto, weakened** | automaton walk; caveat below |
+| **any cross-field invariant** | **user** | not derivable from field declarations |
+
+A constraint that mentions more than one field is syntactically visible. So the last
+row is a **compile error with a precise trigger**, not a warning nobody reads:
+
+```
+error: rules over Booking need a value source
+       Booking has a cross-field invariant:
+         nights == daysBetween(checkIn, checkOut)      booking.rules:14
+       supply either:
+         fixtures/booking.jsonl       (>= 50 rows)  -- preferred
+         fixtures/booking.gen.ts      (Arbitrary<Booking>)
+```
+
+#### The ladder is a ratio, not a choice
+
+Fixtures and constructors are not alternatives. **They are a blend whose weighting
+shifts with corpus size**, because the honest answer changes over a project's life:
+
+| Corpus | Sampling budget | Why |
+|---|---|---|
+| zero rows (greenfield) | 100% constructor | a new project has no data by definition |
+| thin | mostly constructor | real rows are clustered; they cover the common case and nothing else |
+| dense | mostly fixtures | reality satisfies every invariant and carries no tautology risk |
+
+A constructor is therefore required the first time a cross-field invariant appears,
+and progressively demoted rather than deleted. **The verification report always
+prints the actual mix**, because "which values ran" must never be a thing the user
+has to infer:
+
+```
+rules 3/3 ✓   420 constructed · 1,180 corpus · 47 regression · seed 0x7f3a
+```
+
+**Fixtures are still preferred where they exist**, for two reasons that do not
+weaken: reality satisfies invariants by construction, and it carries no tautology
+risk because reality wrote it. What changes is the recognition that "prefer
+fixtures" is unimplementable advice for a project that has none.
+
+**When is a corpus dense enough?** Not a constant, and not a guess. It scales with
+field count and body branchiness — three fields and two branches may need 50 rows;
+twelve fields with a four-field invariant may need thousands before every branch is
+exercised once. It is measurable directly: run the open-decisions pass with the
+corpus alone. If perturbed variants survive that the constructor would have killed,
+the corpus is too thin, and that is a number printed per function rather than a
+rule of thumb.
+
+Filtering remains available and is almost never right: it collapses when the
+invariant admits one tuple in a million, and frameworks then report *"could not
+generate enough values,"* which a tired human reads as a pass. **Failing to meet the
+sample count fails the run.**
+
+#### The tautology trap is detectable, not merely avoidable
+
+If a constructor computes `nights` with the same formula the synthesized body uses,
+no rule over `Booking` can ever catch a bug in that formula. Test and code agree
+because they share the mistake.
+
+Three defenses, and the third is the one that matters:
+
+1. **A constructor that calls the function under test is a compile error.** Static
+   call-graph check — cheap and sound.
+2. **A synthesized constructor is a separate `derive`** with its own examples, and
+   the lockfile records both model ids.
+3. **The open-decisions pass already detects it.** Perturb the pinned body — flip a
+   constant, swap a comparator — and re-run the rules. If a rule ranging over
+   `Booking` *still passes* against a deliberately broken body, that rule is testing
+   nothing, and a shared formula is the most likely reason. The machinery that finds
+   free parameters finds dead rules with no additional apparatus.
+
+That converts *"we hope you did not write a tautology"* into a report naming which
+rules are load-bearing and which are decorative.
+
+#### Shrinking: shrink the preimage, not the value
+
+When a rule fails at `weight = 8347`, the counterexample worth keeping is `5001`.
+
+An earlier draft called invariant-preserving shrinking unsolved. That overstated it.
+The mathematics is clean once a constructor is written in terms of free parameters:
+**never shrink the constructed value — shrink its preimage and re-run the
+constructor.** Shrink `(checkIn, nights)`, both primitives, both trivially
+shrinkable, and every intermediate candidate satisfies the invariant *because it was
+constructed*. This is the second reason to prefer construction over filtering, and
+it is why the ladder is ordered as it is.
+
+The honest residue is far smaller than the original claim: preimage shrinking gives
+*useful* results only when the constructor is roughly continuous in its parameters.
+A constructor that hashes its input yields shrinks that are valid but not smaller.
+That degrades to "no shrink" — unhelpful, never unsound.
+
+**Where a model may and may not participate.** A model must never judge whether a
+counterexample is correct. That is the oracle, and a model in the oracle destroys
+the determinism the entire thesis rests on. A model may **nominate**: propose a
+smaller candidate, which the deterministic runner re-executes. Still fails, keep it;
+passes, discard it. The model never decides, it only suggests, and every suggestion
+is checked by running code. This is the same division as `derive` itself — **the
+model proposes, deterministic machinery disposes** — and it is the only shape in
+which a model call is admissible anywhere in the verification path.
+
+#### The caveat that survives all of this
+
+Regex generation produces **valid** values, and most bugs live at the edge of
+validity. There is no "boundary" of a regex the way there is a boundary of an
+integer range, so you get `a@b.cd` a thousand different ways and never a leading
+space, a 10 KB local part, a homoglyph, or a trailing dot. Lookaheads and
+backreferences are not regular at all and fall back to filtering. For
+format-constrained types the fixture corpus does more of the work than the generator
+does — the same conclusion the ladder reaches from the other direction.
 
 ### Open decisions
 
@@ -650,13 +1066,17 @@ mechanism matches.*
 
 ## Open questions
 
-1. **Spec file format** — `.rules` files versus tagged template literals in `.ts`.
-   This document assumes the former.
+1. **Prose coverage, and note drift.** How often does a real spec fall out of the
+   vocabulary? Rarely means the design works. The sharper risk is notes: they are
+   the path of least resistance, they influence the body, and they verify nothing.
+   A project whose `.rules` files are mostly notes has a spec that reads well and
+   checks nothing, and the report is the only thing standing against it.
 2. **Does a detached body record that it was synthesized?** Publishers keeping
    specs proprietary may not want the marker; regulated consumers may require it.
-3. **Generators for user types.** Rules are only as good as the values fed them.
-   Constrained generation for `matches(/regex/)` and cross-field invariants is the
-   hard case.
+3. **Corpus density thresholds.** The blend is measurable per function, but the
+   demotion curve is not yet specified: at what measured density does constructor
+   weight actually drop, and does a stale constructor left at low weight rot
+   unnoticed because almost nothing runs it?
 4. **The compiler's own host language.** TypeScript for cohesion, or Rust for the
    AST-heavy analysis work. Independent of the emit target.
 5. **Additional backends.** TypeScript is the target; keep a clean backend seam so
