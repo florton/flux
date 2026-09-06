@@ -1,3 +1,19 @@
+/**
+ * Delta debugging with a bounded budget.
+ *
+ * Every predicate call is a subprocess spawn, so an unbounded reduction can
+ * cost minutes per captured row. The budget is shared across a whole
+ * `minimize` call; when it runs out the predicate reports "does not
+ * reproduce", which stops reduction and keeps the smallest input found so
+ * far. Running out of budget can only ever leave the row *less* reduced,
+ * never wrong.
+ */
+export interface Budget {
+  remaining: number;
+}
+
+export const DEFAULT_BUDGET = 200;
+
 export function ddmin<T>(
   candidate: T[],
   test: (c: T[]) => boolean,
@@ -30,7 +46,6 @@ export function ddmin<T>(
 
 export function shrinkNumber(value: number, test: (n: number) => boolean): number {
   let best = value;
-  const candidates: number[] = [0];
   const magnitude = Math.abs(value);
   if (Number.isInteger(value)) {
     for (let step = 2 ** Math.floor(Math.log2(Math.max(1, magnitude))); step >= 1; step = Math.floor(step / 2)) {
@@ -47,21 +62,33 @@ export function shrinkNumber(value: number, test: (n: number) => boolean): numbe
       if (test(next) && Math.abs(next) < Math.abs(best)) best = next;
     }
   }
-  for (const c of candidates) {
-    if (test(c) && Math.abs(c) < Math.abs(best)) best = c;
-  }
+  // Zero is tried last and unconditionally, because it is the most useful
+  // minimal witness when it genuinely reproduces. It is also the input most
+  // likely to fail for an unrelated reason, which is exactly why the caller's
+  // predicate must check the failure *cause* and not merely the exit status.
+  if (best !== 0 && test(0)) best = 0;
   return best;
 }
 
-export function minimize(input: unknown, test: (candidate: unknown) => boolean): unknown {
+export function minimize(
+  input: unknown,
+  test: (candidate: unknown) => boolean,
+  budget: Budget = { remaining: DEFAULT_BUDGET }
+): unknown {
+  const guarded = (candidate: unknown): boolean => {
+    if (budget.remaining <= 0) return false;
+    budget.remaining--;
+    return test(candidate);
+  };
+
   if (Array.isArray(input)) {
-    return ddmin(input, (trial) => test(trial));
+    return ddmin(input, (trial) => guarded(trial));
   }
   if (typeof input === "string" && input.length >= 2) {
-    return ddmin(input.split(""), (chars) => test(chars.join(""))).join("");
+    return ddmin(input.split(""), (chars) => guarded(chars.join(""))).join("");
   }
   if (typeof input === "number") {
-    return shrinkNumber(input, (n) => test(n));
+    return shrinkNumber(input, (n) => guarded(n));
   }
   return input;
 }

@@ -3,10 +3,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { findRoot } from "./paths";
 import { capture } from "./capture";
-import { verify, verifyAndExit } from "./verify";
-import { accept, reopen } from "./accept";
-import { report } from "./report";
+import { verify, verifyAndExit, defaultConcurrency } from "./verify";
+import { accept, reopen, reaffirm } from "./accept";
+import { report, reportData } from "./report";
 import { bisect } from "./bisect";
+import { replay, formatReplay } from "./replay";
+import { validate, formatValidate } from "./validate";
+import { fsck, formatFsck } from "./fsck";
+import { listRows, formatList, showRow, formatRow } from "./inspect";
 import { appendJournal } from "./journal";
 
 function usage(): string {
@@ -14,12 +18,26 @@ function usage(): string {
 
   ratchet init                     create .ratchet/ with a config template
   ratchet capture <file...>        add counterexamples (fast-check capture JSON or junit.xml)
-  ratchet verify [--row id] [--subject name] [--quiet]
+                                   [--reopen] put retired rows back when they recur
+  ratchet verify [--row id] [--subject name] [--quiet] [--jobs N]
+  ratchet list [--status active|archived] [--subject name]
+  ratchet show <id>                a row's full history and journal entries
   ratchet accept <id> --reason "..." [--actor name]
   ratchet reopen <id> --reason "..." [--actor name]
+  ratchet reaffirm <id> --reason "..."   re-pin a row to an edited rule
   ratchet note --text "..." [--actor name]
   ratchet report                   corpus stats and churn summary
-  ratchet bisect <id> --good ref --bad ref
+  ratchet fsck                     corpus and journal integrity check
+  ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
+  ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects]
+  ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]
+
+Every command takes --home <dir> and --json. Row ids are content-addressed;
+any unambiguous prefix works. A check may exit 125 to report "not applicable
+at this commit", which is neither a pass nor a failure. A row whose owning
+rule was edited since capture is quarantined rather than treated as a
+regression: review it, then "reaffirm" (the expectation stands) or "accept"
+(it does not).
 `;
 }
 
@@ -32,25 +50,67 @@ function requireRoot(): string {
   return root;
 }
 
-function argPairs(args: string[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.startsWith("--") && a.includes("=")) {
-      map.set(a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1));
-    } else if (a.startsWith("--") && i + 1 < args.length && !args[i + 1].startsWith("--")) {
-      map.set(a, args[i + 1]);
-      i++;
-    }
-  }
-  return map;
+function homeDir(cwd: string): string {
+  return process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
 }
 
-function main(): void {
-  const args = process.argv.slice(2);
-  const command = args[0];
-  const rest = args.slice(1);
-  const opts = argPairs(rest);
+interface Args {
+  flags: Map<string, string>;
+  bools: Set<string>;
+  positionals: string[];
+}
+
+/**
+ * Split argv into flags, boolean switches, and positionals in one pass, so a
+ * flag's value is never mistaken for a positional. Previously the id was
+ * found with "first token that does not start with --", which picked up the
+ * value of `--reason` when flags came first.
+ */
+const VALUE_FLAGS = new Set([
+  "--row", "--subject", "--home", "--reason", "--actor",
+  "--good", "--bad", "--setup", "--text", "--status", "--jobs",
+  "--every", "--known-bad", "--known-good", "--input", "--confirm",
+]);
+
+function parseArgs(args: string[]): Args {
+  const flags = new Map<string, string>();
+  const bools = new Set<string>();
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith("--")) {
+      positionals.push(a);
+      continue;
+    }
+    const eq = a.indexOf("=");
+    if (eq !== -1) {
+      flags.set(a.slice(0, eq), a.slice(eq + 1));
+      continue;
+    }
+    if (VALUE_FLAGS.has(a)) {
+      if (i + 1 >= args.length) {
+        console.error(`${a} needs a value`);
+        process.exit(1);
+      }
+      flags.set(a, args[++i]);
+      continue;
+    }
+    bools.add(a);
+  }
+  return { flags, bools, positionals };
+}
+
+function emit(json: boolean, data: unknown, text: string): void {
+  console.log(json ? JSON.stringify(data, null, 2) : text);
+}
+
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  const command = argv[0];
+  const { flags, bools, positionals } = parseArgs(argv.slice(1));
+  const home = flags.get("--home");
+  if (home) process.env.RATCHET_HOME = path.resolve(home);
+  const json = bools.has("--json");
 
   switch (command) {
     case "init": {
@@ -71,72 +131,138 @@ function main(): void {
       fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf8");
       fs.writeFileSync(path.join(dir, "corpus.jsonl"), "", "utf8");
       fs.writeFileSync(path.join(dir, "journal.jsonl"), "", "utf8");
+      // Union-merge keeps two branches' appends from conflicting on the last
+      // line; content-addressed ids keep them from colliding once merged.
+      fs.writeFileSync(
+        path.join(dir, ".gitattributes"),
+        "corpus.jsonl merge=union\njournal.jsonl merge=union\n",
+        "utf8"
+      );
       console.log("created .ratchet/ — configure subjects in .ratchet/config.json");
       break;
     }
 
     case "capture": {
       const cwd = requireRoot();
-      const files = rest.filter((a) => !a.startsWith("--"));
-      if (files.length === 0) {
-        console.error("usage: ratchet capture <file...>");
+      if (positionals.length === 0) {
+        console.error("usage: ratchet capture <file...> [--reopen]");
         process.exit(1);
       }
-      const rep = capture(cwd, files.map((f) => path.resolve(cwd, f)));
-      for (const id of rep.added) console.log(`+ ${id}`);
-      for (const s of rep.skipped) console.log(`skip: ${s}`);
-      console.log(`${rep.added.length} added, ${rep.skipped.length} skipped`);
+      const rep = capture(
+        cwd,
+        positionals.map((f) => path.resolve(cwd, f)),
+        {
+          reopen: bools.has("--reopen"),
+          actor: flags.get("--actor") ?? "human",
+          confirmations: flags.has("--confirm") ? parseInt(flags.get("--confirm")!, 10) : undefined,
+        }
+      );
+      const unhandled = rep.recurred.filter((r) => !r.reopened).length;
+      if (json) {
+        console.log(JSON.stringify(rep, null, 2));
+      } else {
+        for (const id of rep.added) console.log(`+ ${id}`);
+        for (const s of rep.skipped) console.log(`skip: ${s}`);
+        for (const s of rep.flaky) console.log(`flaky: ${s}`);
+        for (const s of rep.unconfigured) {
+          console.log(`not captured: "${s}" has no subject in .ratchet/config.json — add one, then capture again`);
+        }
+        for (const r of rep.recurred) {
+          const who = r.acceptedBy ? ` by ${r.acceptedBy}` : "";
+          console.log(
+            `\n[!] REGRESSION RECURRED — ${r.id} ${r.subject}\n` +
+              `    retired ${r.acceptedAt}${who}: ${r.acceptedReason ?? "(no reason recorded)"}\n` +
+              `    that accepted behavior is failing again` +
+              (r.reopened ? " — row reopened and enforcing" : `\n    reopen it with: ratchet reopen ${r.id} --reason "..."`)
+          );
+        }
+        console.log(
+          `\n${rep.added.length} added, ${rep.skipped.length} skipped` +
+            (rep.flaky.length ? `, ${rep.flaky.length} flaky` : "") +
+            (rep.recurred.length ? `, ${rep.recurred.length} recurred` : "") +
+            (rep.unconfigured.length ? `, ${rep.unconfigured.length} unconfigured` : "")
+        );
+      }
+      // A recurrence is a live regression against a decision someone already
+      // made. It must not exit green.
+      if (unhandled > 0 || rep.unconfigured.length > 0) process.exit(1);
       break;
     }
 
     case "verify": {
       const cwd = requireRoot();
-      verifyAndExit(cwd, {
-        row: opts.get("--row"),
-        subject: opts.get("--subject"),
-        quiet: rest.includes("--quiet"),
-        ratchetHome: opts.get("--home"),
+      const jobs = flags.get("--jobs");
+      await verifyAndExit(cwd, {
+        row: flags.get("--row"),
+        subject: flags.get("--subject"),
+        quiet: bools.has("--quiet"),
+        json,
+        ratchetHome: flags.get("--home"),
+        concurrency: jobs ? Math.max(1, parseInt(jobs, 10) || defaultConcurrency()) : undefined,
       });
       break;
     }
 
-    case "accept": {
+    case "list": {
       const cwd = requireRoot();
-      const id = rest.find((a) => !a.startsWith("--"));
-      const reason = opts.get("--reason");
-      if (!id || !reason) {
-        console.error("usage: ratchet accept <id> --reason \"...\"");
+      const status = flags.get("--status");
+      if (status && status !== "active" && status !== "archived") {
+        console.error("--status must be active or archived");
         process.exit(1);
       }
-      accept(cwd, id, reason, opts.get("--actor") ?? "human");
-      console.log(`accepted ${id} — expectation retired, audit trail retained`);
+      const rows = listRows(homeDir(cwd), {
+        status: status as "active" | "archived" | undefined,
+        subject: flags.get("--subject"),
+      });
+      emit(json, rows, formatList(rows));
       break;
     }
 
-    case "reopen": {
+    case "show": {
       const cwd = requireRoot();
-      const id = rest.find((a) => !a.startsWith("--"));
-      const reason = opts.get("--reason");
-      if (!id || !reason) {
-        console.error("usage: ratchet reopen <id> --reason \"...\"");
+      if (!positionals[0]) {
+        console.error("usage: ratchet show <id>");
         process.exit(1);
       }
-      reopen(cwd, id, reason, opts.get("--actor") ?? "human");
-      console.log(`reopened ${id} — row is enforcing again`);
+      const detail = showRow(homeDir(cwd), positionals[0]);
+      emit(json, detail, formatRow(detail));
+      break;
+    }
+
+    case "accept":
+    case "reopen":
+    case "reaffirm": {
+      const cwd = requireRoot();
+      const id = positionals[0];
+      const reason = flags.get("--reason");
+      if (!id || !reason) {
+        console.error(`usage: ratchet ${command} <id> --reason "..."`);
+        process.exit(1);
+      }
+      const actor = flags.get("--actor") ?? "human";
+      if (command === "accept") {
+        console.log(`accepted ${accept(cwd, id, reason, actor)} — expectation retired, audit trail retained`);
+      } else if (command === "reopen") {
+        console.log(`reopened ${reopen(cwd, id, reason, actor)} — row is enforcing again`);
+      } else {
+        console.log(
+          `reaffirmed ${reaffirm(cwd, id, reason, actor)} — re-pinned to the current rule, quarantine lifted`
+        );
+      }
       break;
     }
 
     case "note": {
       const cwd = requireRoot();
-      const text = opts.get("--text");
+      const text = flags.get("--text");
       if (!text) {
-        console.error("usage: ratchet note --text \"...\"");
+        console.error('usage: ratchet note --text "..."');
         process.exit(1);
       }
-      appendJournal(path.join(process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet"), "journal.jsonl"), {
+      appendJournal(path.join(homeDir(cwd), "journal.jsonl"), {
         at: new Date().toISOString(),
         kind: "decision",
-        actor: opts.get("--actor") ?? "human",
+        actor: flags.get("--actor") ?? "human",
         text,
       });
       console.log("journal entry appended");
@@ -145,26 +271,83 @@ function main(): void {
 
     case "report": {
       const cwd = requireRoot();
-      if (opts.get("--home")) process.env.RATCHET_HOME = opts.get("--home")!;
-      console.log(report(cwd));
+      emit(json, reportData(cwd), report(cwd));
+      break;
+    }
+
+    case "fsck": {
+      const cwd = requireRoot();
+      const result = fsck(homeDir(cwd));
+      emit(json, result, formatFsck(result));
+      if (!result.ok) process.exit(1);
       break;
     }
 
     case "bisect": {
       const cwd = requireRoot();
-      const id = rest.find((a) => !a.startsWith("--"));
-      const good = opts.get("--good");
-      const bad = opts.get("--bad");
+      const id = positionals[0];
+      const good = flags.get("--good");
+      const bad = flags.get("--bad");
       if (!id || !good || !bad) {
-        console.error("usage: ratchet bisect <id> --good ref --bad ref");
+        console.error('usage: ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]');
         process.exit(1);
       }
-      if (!process.env.RATCHET_HOME) {
-        process.env.RATCHET_HOME = path.join(cwd, ".ratchet");
+      if (!json) console.log(`bisecting row ${id} (good=${good}, bad=${bad})...`);
+      const result = await bisect(cwd, id, good, bad, {
+        setup: flags.get("--setup"),
+        ratchetHome: homeDir(cwd),
+      });
+      emit(
+        json,
+        result,
+        result.notes.map((n) => `note: ${n}`).concat(`first bad commit: ${result.firstBad}  (${result.probes} probes)`).join("\n")
+      );
+      break;
+    }
+
+    case "replay": {
+      const cwd = requireRoot();
+      const good = flags.get("--good");
+      const bad = flags.get("--bad") ?? "HEAD";
+      if (!good) {
+        console.error('usage: ratchet replay --good ref [--bad ref] [--every N|day|week]');
+        process.exit(1);
       }
-      console.log(`bisecting row ${id} (good=${good}, bad=${bad})...`);
-      const result = bisect(cwd, id, good, bad);
-      console.log(`first bad commit: ${result.trim().split("\n")[0]}`);
+      const result = await replay(cwd, {
+        good,
+        bad,
+        row: flags.get("--row"),
+        subject: flags.get("--subject"),
+        every: flags.get("--every"),
+        setup: flags.get("--setup"),
+        ratchetHome: homeDir(cwd),
+        noPinpoint: bools.has("--no-pinpoint"),
+        subjects: bools.has("--subjects"),
+      });
+      emit(json, result, formatReplay(result));
+      if (result.samples.some((x) => x.status === "fail")) process.exit(1);
+      break;
+    }
+
+    case "validate": {
+      const cwd = requireRoot();
+      const subject = positionals[0];
+      const knownBad = flags.get("--known-bad");
+      if (!subject || !knownBad) {
+        console.error('usage: ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]');
+        process.exit(1);
+      }
+      const raw = flags.get("--input");
+      const result = await validate(cwd, subject, {
+        knownBad,
+        knownGood: flags.get("--known-good"),
+        input: raw === undefined ? undefined : JSON.parse(raw),
+        setup: flags.get("--setup"),
+        ratchetHome: homeDir(cwd),
+        actor: flags.get("--actor") ?? "human",
+      });
+      emit(json, result, formatValidate(result));
+      if (!result.valid) process.exit(1);
       break;
     }
 
@@ -174,4 +357,7 @@ function main(): void {
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(`ratchet: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});

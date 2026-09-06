@@ -3,6 +3,16 @@
 Consolidates the four field experiments (margin, odds, newportfolio, particles),
 the six questions they answer, and what the prototype must become next. The
 experiment detail lives in `EXPERIMENTS_RATCHET.md`; this file is the plan.
+Defects and findings from the v0 code review are in
+[ISSUES_RATCHET.md](ISSUES_RATCHET.md), including gaps in this document.
+
+**Built as of v0.4** (see [ratchet/README.md](ratchet/README.md)): the replay
+sampler with halving, the `na`/`na(env)` distinction and environment recording,
+owning-rule hashes with quarantine, the subject-validation protocol as
+`ratchet validate`, history commands in worktrees, and self-hosting. What
+remains from the list below is the bundled probe kind, corpus rows carrying a
+numeric witness, per-commit artifact caching, and the journal's requirement
+schema.
 
 ---
 
@@ -112,8 +122,11 @@ A/B verdict.
    contains "fixed some of the bets")** — game-balance and data invariants via
    static analysis of GDScript/scene files; the branch gate on `feature/doom`.
    Tests whether the pattern survives without a runnable test harness.
-4. **Self-hosting** — run the ratchet under itself in its own repo: config
-   parses, checks terminate within timeout, corpus stays enforce-able.
+4. **Self-hosting — DONE.** Five subjects over this repository, each a check
+   of the checker, all validated against `4abc1d5` where the bugs lived.
+   Replayed over its own history: 0/5 passing at v0, 4/5 at v0.2, 5/5 at v0.3.
+   Two subjects failed their own validation first and had to be rewritten to
+   exercise the real capture path — the protocol earning its keep.
 
 ## Open product questions
 

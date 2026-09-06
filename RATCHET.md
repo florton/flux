@@ -4,6 +4,13 @@
 > [DESIGN_V3.md](DESIGN_V3.md) (see issue D in [ISSUES.md](ISSUES.md)). The
 > ratchet is the part of Flux worth shipping first, and it does not depend on
 > any other part.
+>
+> **Much of this is now built** — see [ratchet/](ratchet/) (v0.4). The corpus,
+> the journal, the accept ceremony, owning-rule hashes with quarantine,
+> cause-preserving minimization, replay with sampling and halving, and subject
+> validation all exist and are tested. Still design-only: mining deleted tests
+> (mode 2), semantic history (mode 3), behavior snapshots, metric budgets, and
+> static checks. `ratchet/README.md` carries the current line between them.
 
 ---
 
@@ -86,7 +93,12 @@ fed to agents as context, honored or not. Prose plus a row is enforced on every
 CI run forever. Journals that carry only prose rot into narrative; the report
 counts the ratio and says so.
 
-Merge behavior is trivial because it is append-only: no conflicts, ever.
+Merge behavior is conflict-free **given** two things the format has to
+supply: a `merge=union` driver for the JSONL files (git otherwise conflicts
+on the trailing line of two branches' appends) and content-addressed row
+ids (sequential ids collide across branches, and a fold keyed by id then
+drops one row silently). Both ship in the v0.2 prototype; see
+[ISSUES_RATCHET.md](ISSUES_RATCHET.md) R3 and R4.
 
 ### 3. Pins and behavior snapshots — the oracle
 

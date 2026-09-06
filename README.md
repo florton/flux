@@ -9,10 +9,17 @@ wherever the specification is knowable, and bound it where it cannot move.
   compile-time synthesis step
 - **[RATCHET.md](RATCHET.md)** - The ratchet extracted as a standalone library:
   regression memory for AI-assisted development, shipped first
-- **[ratchet/](ratchet/)** - **v0 prototype** of the ratchet: working CLI with
-  capture, verify, accept ceremony, report, and retroactive bisect. See
+- **[ratchet/](ratchet/)** - **v0.4 — built, tested, and self-hosting.** Working
+  CLI: capture with cause-preserving reduction, verify, the accept ceremony,
+  owning-rule hashes with quarantine, replay across history with sampling and
+  halving, subject validation, bisect, fsck. See
   [ratchet/README.md](ratchet/README.md) and the
   [walkthrough](ratchet/demo/README.md).
+- **[EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)** - Four field experiments
+  (margin, odds, newportfolio, particles) and the five questions they answer
+- **[NEXT_STEPS.md](NEXT_STEPS.md)** - What those experiments demand of the design
+- **[ISSUES_RATCHET.md](ISSUES_RATCHET.md)** - The v0 code review: 21 findings, each
+  reproduced by execution, all closed
 - **[EXPERIMENT_LEETCODE.md](EXPERIMENT_LEETCODE.md)** - LeetCode ceiling experiment:
   statement length vs. solution length, with results
 - **[ISSUES.md](ISSUES.md)** - Open issues from design review, kept current
@@ -102,9 +109,12 @@ ships.
 
 ## Status
 
-Design phase. See **[DESIGN_V3.md](DESIGN_V3.md)** for the current proposal.
+Two tracks, at different stages.
 
-The design has moved through three forms:
+### Flux the language — design phase
+
+See **[DESIGN_V3.md](DESIGN_V3.md)** for the current proposal. The design has moved
+through three forms:
 
 - **v1** — a standalone language with `infer` as the central runtime primitive
 - **v2** — three determinism tiers (`func` / `derive` / `infer`), moving inference
@@ -113,6 +123,31 @@ The design has moved through three forms:
   compile-time transformer, trading syntactic enforcement for ecosystem, tooling,
   and incremental adoption
 
-Nothing is built yet. Everything rests on one unmeasured assumption — that writing
-a specification is genuinely less work than writing the code — and DESIGN_V3.md
-closes with the experiment that settles it.
+None of it is built. Everything rests on one unmeasured assumption — that writing a
+specification is genuinely less work than writing the code — and DESIGN_V3.md
+closes with the experiment that settles it. That experiment is still ungated:
+[EXPERIMENT_LEETCODE.md](EXPERIMENT_LEETCODE.md) measured the ceiling and found the
+"spec is less work" pitch does not survive it, which rescopes the claim to "spec
+costs about the same, but is verifiable, durable, and outlives the implementation".
+
+### The ratchet — built
+
+The ratchet was the part worth shipping first, and it does not depend on any other
+part of Flux ([ISSUES.md](ISSUES.md) item D). [ratchet/](ratchet/) is a
+zero-dependency TypeScript CLI at v0.4 with 47 tests, validated in four real repos
+([EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)) and hardened by a code review
+that reproduced 21 defects by execution ([ISSUES_RATCHET.md](ISSUES_RATCHET.md)).
+
+It now runs under itself. [`.ratchet/`](.ratchet) configures five subjects over
+this repository — checks of the checker — each validated against `4abc1d5`, the
+last v0 commit, where the corresponding bug actually lived. Replayed across its own
+history:
+
+```
+✗ 4abc1d5  ratchet experiments                    0 pass, 5 fail
+✗ 0d710eb  fix the seven safety defects (v0.2)    4 pass, 1 fail
+✓ f4a9f84  close the remaining issues (v0.3)      5 pass, 0 fail
+```
+
+The one still failing at v0.2 is the dedup-key aliasing bug, fixed in v0.3. The
+replay reconstructs the fix history without being told it.

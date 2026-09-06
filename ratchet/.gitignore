@@ -1,3 +1,9 @@
 node_modules/
 dist/
-demo/
+
+# The demo repository is generated, not committed: it needs its own .git
+# history to demonstrate replay, and a nested .git cannot live inside this
+# repository. `node demo/setup.js` rebuilds it into demo/repo/.
+demo/*
+!demo/setup.js
+!demo/README.md
