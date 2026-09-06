@@ -4,6 +4,13 @@
 > [DESIGN_V3.md](DESIGN_V3.md) (see issue D in [ISSUES.md](ISSUES.md)). The
 > ratchet is the part of Flux worth shipping first, and it does not depend on
 > any other part.
+>
+> **Much of this is now built** — see [ratchet/](ratchet/) (v0.4). The corpus,
+> the journal, the accept ceremony, owning-rule hashes with quarantine,
+> cause-preserving minimization, replay with sampling and halving, and subject
+> validation all exist and are tested. Still design-only: mining deleted tests
+> (mode 2), semantic history (mode 3), behavior snapshots, metric budgets, and
+> static checks. `ratchet/README.md` carries the current line between them.
 
 ---
 

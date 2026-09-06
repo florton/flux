@@ -95,8 +95,14 @@ preserving the cost-lever argument without prohibition.
   **v0.2 built 2026-09-06:** the seven critical/high defects are fixed with a
   regression test each — checks spawn without a shell, recurrence after accept
   is reported instead of swallowed, reduction preserves the failure cause, row
-  ids are content-addressed, and bisect runs in a worktree. Fourteen
-  lower-severity issues stay open.
+  ids are content-addressed, and bisect runs in a worktree.
+  **v0.3 and v0.4 built 2026-09-06:** all 21 findings closed, then the design
+  gaps behind them — owning-rule hashes with quarantine, the frozen instrument
+  (`{home}`), the second confirmation run, `ratchet replay` with sampling and
+  halving, and `ratchet validate`. The ratchet now self-hosts: `.ratchet/` runs
+  five subjects over this repository, each validated against the commit where
+  its bug lived. This closes the "corpus traceability" half of issue B — rows
+  carry their originating rule hash, seed, and commit.
 - **E. Spec-wrongness is unreachable.** Open-decision analysis finds what the
   spec leaves open, never what it gets wrong (already DESIGN_V3.md open question
   5). The mutant-coverage report (issue 4) shrinks but does not close this.

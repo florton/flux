@@ -184,3 +184,31 @@ $ $R fsck                    # corpus integrity: bad lines, orphans, tampered id
 $ $R verify --json           # machine-readable, for CI annotation
 $ $R verify --jobs 8         # rows checked in parallel
 ```
+
+This history is small enough to replay densely, and it has exactly one real bug
+in it, so both history commands have something to find:
+
+```
+$ $R replay --good v1 --bad main
+replay: 4 of 4 commits (dense)
+environment: node v20.9.0 on win32/x64
+
+  ✗ 922e7daa  0 pass, 1 fail  optimize hour parsing
+  ✓ 8f9e3694  1 pass, 0 fail  format zero as empty string
+  ...
+```
+
+`validate` proves the subject is strong enough to be worth trusting — it must
+fail at a commit known to contain the bug, and pass at one known not to:
+
+```
+$ $R validate roundtrip --known-bad broken --known-good v1 --input 3600
+  ✓ known-bad  922e7daa "optimize hour parsing" — fails as required:
+      round-trip failed: 3600 formatted to "1h" and parsed back as 60
+  ✓ known-good c572188e "duration functions..." — passes as required
+
+validated — proof recorded in the journal against this rule hash
+```
+
+A subject that passes through the known bug is refused, and no proof is
+recorded. Try it by pointing `validate` at a subject that asserts nothing.

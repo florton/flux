@@ -19,7 +19,8 @@ forever. This is a good v0; it is not yet safe to point at a shared repo.
 fixed R1–R7, the correctness and security tier, each with a regression test and
 each original repro re-run against the new build. v0.3 closed the remainder:
 the `na` outcome, `fsck`, `list`/`show`, `--json`, parallel `verify`, the
-packaging fix, and a generated demo. 33 tests. The repro transcripts below are
+packaging fix, and a generated demo. v0.4 then closed the design gaps behind
+them. 47 tests. The repro transcripts below are
 kept as written — they are the record of what each defect actually was.
 
 | # | Severity | Status | Issue | Location |
@@ -51,7 +52,7 @@ kept as written — they are the record of what each defect actually was.
 ## Resolved in v0.2
 
 What changed, per issue. Every fix carries a regression test in
-`ratchet/test/ratchet.test.ts` (22 tests, all passing), and every original
+`ratchet/test/` (47 tests across three files, all passing), and every original
 repro above was re-run against the new build.
 
 **R1 — arbitrary command execution.** Checks are now tokenized and spawned

@@ -1,9 +1,14 @@
-# Ratchet Field Experiments — Margin, Odds, Newportfolio
+# Ratchet Field Experiments — Margin, Odds, Newportfolio, Particles
 
-Three real repos, three different roles for the ratchet v0 prototype:
-margin (QA-side heuristic drift), odds (retroactive bug replay), newportfolio
-(branch gate). Each repo got a project-local `tools/ratchet-check.js` plus a
-`.ratchet/config.json`; no user source code was touched.
+Four real repos, four different roles for the ratchet v0 prototype: margin
+(QA-side heuristic drift), odds (retroactive bug replay), newportfolio (branch
+gate), particles (sampled replay and a domain quality metric). Each repo got a
+project-local `tools/ratchet-check.js` plus a `.ratchet/config.json`; no user
+source code was touched.
+
+These ran against **v0**. The defects that review later found in that version
+are in [ISSUES_RATCHET.md](ISSUES_RATCHET.md); the readings below stand, but
+the prototype they were taken with has since been rebuilt through v0.4.
 
 Check contract everywhere: read one JSON object on stdin, exit 0 = pass,
 nonzero = fail, stdout = the reason.
