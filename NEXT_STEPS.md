@@ -3,6 +3,8 @@
 Consolidates the four field experiments (margin, odds, newportfolio, particles),
 the six questions they answer, and what the prototype must become next. The
 experiment detail lives in `EXPERIMENTS_RATCHET.md`; this file is the plan.
+Defects and findings from the v0 code review are in
+[ISSUES_RATCHET.md](ISSUES_RATCHET.md), including gaps in this document.
 
 ---
 

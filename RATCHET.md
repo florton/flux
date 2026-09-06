@@ -86,7 +86,12 @@ fed to agents as context, honored or not. Prose plus a row is enforced on every
 CI run forever. Journals that carry only prose rot into narrative; the report
 counts the ratio and says so.
 
-Merge behavior is trivial because it is append-only: no conflicts, ever.
+Merge behavior is conflict-free **given** two things the format has to
+supply: a `merge=union` driver for the JSONL files (git otherwise conflicts
+on the trailing line of two branches' appends) and content-addressed row
+ids (sequential ids collide across branches, and a fold keyed by id then
+drops one row silently). Both ship in the v0.2 prototype; see
+[ISSUES_RATCHET.md](ISSUES_RATCHET.md) R3 and R4.
 
 ### 3. Pins and behavior snapshots — the oracle
 

@@ -88,6 +88,15 @@ preserving the cost-lever argument without prohibition.
   shrinking, verify, accept/reopen ceremony, churn report, and manual binary
   bisect (`git bisect run` is unreliable on Windows git). Demo with a seeded
   git history at [ratchet/demo/](ratchet/demo/).
+  **v0 reviewed 2026-09-05:** 21 open defects and findings recorded in
+  [ISSUES_RATCHET.md](ISSUES_RATCHET.md) — two critical (shell injection via
+  `{test}` substitution; an accepted row can never re-catch its own regression),
+  five high. The design holds; the corpus-integrity seams do not.
+  **v0.2 built 2026-09-06:** the seven critical/high defects are fixed with a
+  regression test each — checks spawn without a shell, recurrence after accept
+  is reported instead of swallowed, reduction preserves the failure cause, row
+  ids are content-addressed, and bisect runs in a worktree. Fourteen
+  lower-severity issues stay open.
 - **E. Spec-wrongness is unreachable.** Open-decision analysis finds what the
   spec leaves open, never what it gets wrong (already DESIGN_V3.md open question
   5). The mutant-coverage report (issue 4) shrinks but does not close this.

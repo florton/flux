@@ -1,6 +1,6 @@
 {
   "name": "ratchet",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Regression memory for AI-assisted development: permanent counterexamples, journal, accept ceremony, behavioral replay over git history.",
   "private": true,
   "main": "dist/index.js",

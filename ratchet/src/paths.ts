@@ -20,16 +20,3 @@ export function loadConfig(dir: string): RatchetConfig {
   const raw = fs.readFileSync(path.join(dir, "config.json"), "utf8");
   return JSON.parse(raw) as RatchetConfig;
 }
-
-export function nextRowId(corpusPath: string): string {
-  if (!fs.existsSync(corpusPath)) return "c0001";
-  const text = fs.readFileSync(corpusPath, "utf8");
-  let max = 0;
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    const ev = JSON.parse(line);
-    const m = /^c(\d+)$/.exec(ev.id);
-    if (m) max = Math.max(max, parseInt(m[1], 10));
-  }
-  return `c${String(max + 1).padStart(4, "0")}`;
-}
