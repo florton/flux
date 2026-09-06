@@ -1,0 +1,18 @@
+{
+  "name": "ratchet",
+  "version": "0.1.0",
+  "description": "Regression memory for AI-assisted development: permanent counterexamples, journal, accept ceremony, behavioral replay over git history.",
+  "private": true,
+  "main": "dist/index.js",
+  "bin": {
+    "ratchet": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test dist/test/"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1255,6 +1255,20 @@ kills the thesis outright, while a favorable one bounds the best case and says
 nothing about the median. Worth running first precisely because it is the cheapest
 way to be told no.
 
+**Result — run 2026-09-05, see [EXPERIMENT_LEETCODE.md](EXPERIMENT_LEETCODE.md).**
+n=45, stratified by difficulty: full statement ≈ 1.4× the solution; statement minus
+constraints ≈ 1.15×; the narrative core (what maps to `rule` clauses) ≈ **0.52×**,
+and hard problems carry the *lowest* ratio — value is highest where code is
+fiddliest. The raw prose number is unfavorable, but its excess is formatting bloat
+(examples are tabular in Flux, constraints are type declarations, not prose). The
+verdict that falls out: **the pitch rescopes.** "The spec is less work than the
+code" does not survive at the ceiling; what survives is "the spec costs about the
+same, and outlives the implementation" — one statement, many bodies, which is the
+durability argument this document already makes. Consequence: the baseline-set
+scoring below should reweight from "meaningfully shorter" toward pass-rate and
+reuse. Open issues 1–2 and the scoring question are tracked in
+[ISSUES.md](ISSUES.md).
+
 ### The baseline set
 
 The real measurement needs concrete functions **chosen before any specs are

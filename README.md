@@ -7,6 +7,15 @@ wherever the specification is knowable, and bound it where it cannot move.
 
 - **[DESIGN_V3.md](DESIGN_V3.md)** - **Current proposal.** TypeScript library with a
   compile-time synthesis step
+- **[RATCHET.md](RATCHET.md)** - The ratchet extracted as a standalone library:
+  regression memory for AI-assisted development, shipped first
+- **[ratchet/](ratchet/)** - **v0 prototype** of the ratchet: working CLI with
+  capture, verify, accept ceremony, report, and retroactive bisect. See
+  [ratchet/README.md](ratchet/README.md) and the
+  [walkthrough](ratchet/demo/README.md).
+- **[EXPERIMENT_LEETCODE.md](EXPERIMENT_LEETCODE.md)** - LeetCode ceiling experiment:
+  statement length vs. solution length, with results
+- **[ISSUES.md](ISSUES.md)** - Open issues from design review, kept current
 - **[LANGUAGE_DESIGN_V2.md](LANGUAGE_DESIGN_V2.md)** - Standalone-language form, retained
   for reference. Same design decisions, different delivery vehicle
 - **[LANGUAGE_DESIGN.md](LANGUAGE_DESIGN.md)** - Original v1 language specification
