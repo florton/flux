@@ -636,12 +636,11 @@ problem.
 Three statements in the docs are not true of the code as written. Each is a
 one-line documentation fix once the corresponding defect is resolved.
 
-1. **"Every capture runs dual-run discrimination"** — *resolved in v0.2 by
-   making it true*: both sources now run the reproduce check (R7). The README
-   no longer claims two runs. [RATCHET.md](RATCHET.md) still states "A failure
-   must reproduce twice to enter the corpus", which remains **false** — one
-   confirmation runs, so a 50%-flaky check is still stored half the time. Either
-   implement the second run or restate the property.
+1. **"Every capture runs dual-run discrimination"** — *resolved*. v0.2 made
+   both sources run the reproduce check (R7); v0.4 added the second
+   confirmation run, so [RATCHET.md](RATCHET.md)'s "a failure must reproduce
+   twice to enter the corpus" is now true of the code. A check that disagrees
+   between runs is reported as flaky and nothing is stored.
 2. **"Merge behavior is trivial because it is append-only: no conflicts, ever"**
    — *the code half is resolved in v0.2* (content ids, timestamp fold,
    `merge=union`), but the sentence in [RATCHET.md](RATCHET.md) is still wrong
@@ -650,20 +649,20 @@ one-line documentation fix once the corresponding defect is resolved.
    union merge driver and content-addressed ids".
 3. **"Frozen instrument — the check script is pinned across every commit... so
    readings are comparable by construction"**
-   ([EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)) — checks live in
-   `.ratchet/config.json`, which is committed to the repo and mutates with it, and
-   no corpus row records which version of its check produced it.
-   [RATCHET.md](RATCHET.md)'s `rule_hash` is the designed answer and is listed as
-   not-yet-built. Until it exists, readings across history are *not* comparable by
-   construction. This is the largest unacknowledged gap between the design
-   documents and the prototype.
+   ([EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)) — *resolved in v0.4*, and
+   it took two mechanisms rather than one. Rows now record their owning-rule
+   hash, so a reading taken under a different instrument is detectable
+   (quarantine). And `{home}` lets the instrument live in the ratchet home,
+   which history commands carry out of the working tree, so the same script
+   measures every commit instead of each commit measuring itself. Without the
+   second half the claim stayed false no matter how the rows were hashed.
 
 ## Measurements
 
 | what | value |
 |---|---|
 | source size | 868 `src` / 177 tests (v0) → 1922 `src` / 732 tests (v0.3) |
-| test suite | 11/11 pass, 5.4 s (v0) → 33/33 pass, 9.6 s (v0.3) |
+| test suite | 11/11 pass, 5.4 s (v0) → 47/47 pass, 10.3 s (v0.4) |
 | `verify` throughput | 62 ms/row serial (v0) → 20 ms/row at default concurrency (v0.3) |
 | check timeout | 30 s hardcoded (v0) → per-subject `timeoutMs` (v0.3) |
 | minimization budget | up to ~100 spawns/row, no overall cap |
@@ -711,27 +710,67 @@ main is behind its own floor; visual rejection is uncatchable by design). The
 6. Item 1 is headed **DONE** but ends "Remaining: capture it as a corpus row and
    run it through the accept ceremony." It is not done.
 
+## Closed in v0.4 — the design gaps behind the findings
+
+The 21 findings were defects in the prototype. Behind them sat five gaps
+between [RATCHET.md](RATCHET.md) / [NEXT_STEPS.md](NEXT_STEPS.md) and what was
+built. All five are now closed.
+
+**Owning-rule hashes and quarantine.** Each row records the hash of its check
+command plus the files the subject declares it `owns`. Rule unchanged and the
+row fails → hard block. Rule edited since capture → quarantine: routed to
+review, not counted as a regression, resolved by `ratchet reaffirm` (the
+expectation stands under the new instrument) or `ratchet accept` (it does
+not). This is the piece [RATCHET.md](RATCHET.md) calls load-bearing, and its
+absence was the largest gap between the documents and the code.
+
+**The frozen instrument.** A check written as `node check.js` runs whatever
+the checked-out tree contains, so replay measured each commit with that
+commit's own instrument. `{home}` now resolves to the ratchet home, which
+history commands carry out of the tree, and `RATCHET_HOME` is exported to
+every check. The same script measures every commit — which is what
+"comparable by construction" actually requires.
+
+**The second confirmation run.** A failure must now reproduce twice, with the
+same signature, before it enters the corpus; disagreement is reported as a
+flaky check and nothing is stored. `--confirm N` tunes it. The design promised
+this and one run was happening.
+
+**`ratchet replay` with sampling and halving.** `--every N` or
+`--every day|week` samples, and any pass → fail transition is closed by
+halving — coarse to fine. `--subjects` replays standing invariants rather
+than corpus rows, which is what the field experiments actually did. Setup
+failures at old commits are reported as `na-env` rather than as regressions,
+and the environment each run happened under is recorded, which is the
+`na(env)` half of the third-outcome requirement.
+
+**`ratchet validate` and self-hosting.** The subject-validation protocol is a
+command: prove the subject fails at a known-bad ref and passes at a known-good
+one, with the proof written to the journal against the rule hash it was proven
+under, so editing the check invalidates its own validation. The ratchet is now
+configured over its own repository with five subjects, all validated against
+`4abc1d5` — the last v0 commit, where those bugs lived. Replayed over its own
+history it reports 0/5 passing at v0, 4/5 at v0.2, 5/5 at v0.3, reconstructing
+the fix history unaided.
+
+Two of those five subjects **failed their own validation** on the first
+attempt: they exercised `minimize` and `foldRows` in isolation while the
+defects lived in the capture path that calls them, so they passed straight
+through the bug they were written for. The protocol caught them. That is the
+single best piece of evidence in this document that it is worth having.
+
 ## What comes next
 
-All 21 review findings are closed. What remains is not on this list — it is in
-[NEXT_STEPS.md](NEXT_STEPS.md) and [RATCHET.md](RATCHET.md):
+Not defects — unbuilt design from [RATCHET.md](RATCHET.md):
 
-1. **`na(env)` vs `na(code)`.** v0.3 has one `na`. Distinguishing "does not
-   apply here" from "cannot run in this environment" needs per-run environment
-   recording, which is unbuilt.
-2. **Owning-rule hashes.** Until a row records which version of its check
-   produced it, "readings are comparable by construction" is not true — see
-   "Claim vs. implementation" item 3. This is the largest remaining gap between
-   the design documents and the prototype.
-3. **The second confirmation run.** [RATCHET.md](RATCHET.md) promises a failure
-   must reproduce *twice*; one confirmation runs, so a flaky check is still
-   stored half the time.
-4. **`ratchet replay`** with the sampling policy, and the subject-validation
-   protocol as an actual command.
-5. **Self-hosting.** Run the ratchet under itself. A subject asserting "the
-   corpus folds to the same row count after a simulated merge" would have
-   caught R3; "every stored row still reproduces its recorded reason" would
-   have caught R5.
+1. **Mode 2, mine.** `ratchet history` walking test-file history to resurrect
+   deleted and weakened assertions.
+2. **Mode 3, semantic history.** Behavioral diff between two commits.
+3. **Behavior snapshots and metric budgets.** The baseline-relative form, which
+   is the only one that survives shared CI runners.
+4. **Static checks and the PR bot.** `--json` is in place; nothing consumes it.
+5. **Per-branch corpora**, still an open product question from
+   [NEXT_STEPS.md](NEXT_STEPS.md).
 
 Self-hosting ([NEXT_STEPS.md](NEXT_STEPS.md) experiment 4) should move up. A
 ratchet subject asserting "the corpus folds to the same row count after a

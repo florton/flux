@@ -138,7 +138,7 @@ test("R14: exit 125 is n/a — neither a pass nor a failure", async () => {
   assert.equal(naRow!.outcome, "na");
   assert.equal(naRow!.pass, false, "n/a is not a pass");
   assert.equal(failRow!.outcome, "fail");
-  assert.deepEqual(countOutcomes(results), { pass: 0, fail: 1, na: 1 });
+  assert.deepEqual(countOutcomes(results), { pass: 0, fail: 1, na: 1, quarantine: 0 });
 });
 
 test("R14: an n/a counterexample is not stored as evidence", async () => {

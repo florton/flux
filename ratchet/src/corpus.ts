@@ -148,6 +148,7 @@ export function foldCorpus(events: CorpusEvent[]): CorpusFold {
         status: "active",
         test: ev.test,
         signature: ev.signature,
+        ruleHash: ev.ruleHash,
         source: ev.source,
         capturedAt: prev?.capturedAt ?? ev.at,
         lastOp: ev.op,
@@ -155,14 +156,18 @@ export function foldCorpus(events: CorpusEvent[]): CorpusFold {
         lastReason: ev.reason,
         lastActor: ev.actor,
       });
-    } else if (ev.op === "accept" || ev.op === "reopen") {
+    } else if (ev.op === "accept" || ev.op === "reopen" || ev.op === "reaffirm") {
       if (!prev) {
         orphans.push(ev);
         continue;
       }
       rows.set(ev.id, {
         ...prev,
-        status: ev.op === "accept" ? "archived" : "active",
+        // reaffirm re-pins the row to the current rule and leaves its status
+        // alone; it is the operation that lifts a quarantine without
+        // pretending the expectation itself changed.
+        status: ev.op === "accept" ? "archived" : ev.op === "reopen" ? "active" : prev.status,
+        ruleHash: ev.op === "reaffirm" ? ev.ruleHash ?? prev.ruleHash : prev.ruleHash,
         lastOp: ev.op,
         lastAt: ev.at,
         lastReason: ev.reason,

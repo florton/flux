@@ -10,6 +10,16 @@ export interface RunOptions {
   shell?: boolean;
   /** Value for `{test}` substitution and the RATCHET_TEST env var. */
   testName?: string;
+  /**
+   * The ratchet home, for `{home}` substitution and the RATCHET_HOME env var.
+   *
+   * This is what lets an instrument live outside the tree it measures. During
+   * replay the home is carried out of the working tree, so a check written as
+   * `node {home}/tools/probe.js` runs the *same* script at every commit
+   * instead of whatever that commit happened to contain — which is what makes
+   * readings across history comparable by construction rather than by hope.
+   */
+  homeDir?: string;
 }
 
 export interface RunResult {
@@ -98,6 +108,7 @@ function fail(reason: string): RunResult {
 function invocation(command: string, input: unknown, opts: RunOptions): Invocation | RunResult {
   const env = { ...process.env };
   if (opts.testName !== undefined) env.RATCHET_TEST = opts.testName;
+  if (opts.homeDir !== undefined) env.RATCHET_HOME = opts.homeDir;
 
   const options = {
     cwd: opts.cwd,
@@ -124,10 +135,13 @@ function invocation(command: string, input: unknown, opts: RunOptions): Invocati
   }
   if (argv.length === 0) return fail("empty check command");
 
-  // Whole-token substitution: the test name becomes exactly one argv element
-  // and can never split into extra arguments or shell syntax.
+  // Whole-token substitution: a substituted value becomes exactly one argv
+  // element and can never split into extra arguments or shell syntax.
   if (opts.testName !== undefined) {
     argv = argv.map((t) => (t.includes("{test}") ? t.split("{test}").join(opts.testName!) : t));
+  }
+  if (opts.homeDir !== undefined) {
+    argv = argv.map((t) => (t.includes("{home}") ? t.split("{home}").join(opts.homeDir!) : t));
   }
   const exe = resolveExecutable(argv[0], opts.cwd);
   if (/\.(cmd|bat)$/i.test(exe)) {

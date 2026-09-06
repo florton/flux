@@ -1,0 +1,24 @@
+{
+  "subjects": {
+    "corpus-merge-safe": {
+      "check": "node {home}/tools/selfcheck.js corpus-merge-safe",
+      "owns": [".ratchet/tools/selfcheck.js"]
+    },
+    "stringify-injective": {
+      "check": "node {home}/tools/selfcheck.js stringify-injective",
+      "owns": [".ratchet/tools/selfcheck.js"]
+    },
+    "reduction-preserves-cause": {
+      "check": "node {home}/tools/selfcheck.js reduction-preserves-cause",
+      "owns": [".ratchet/tools/selfcheck.js"]
+    },
+    "recurrence-is-visible": {
+      "check": "node {home}/tools/selfcheck.js recurrence-is-visible",
+      "owns": [".ratchet/tools/selfcheck.js"]
+    },
+    "fold-is-order-independent": {
+      "check": "node {home}/tools/selfcheck.js fold-is-order-independent",
+      "owns": [".ratchet/tools/selfcheck.js"]
+    }
+  }
+}

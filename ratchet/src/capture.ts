@@ -7,6 +7,7 @@ import type { CorpusEvent, RatchetConfig, RowState, SubjectConfig } from "./type
 import { minimize, DEFAULT_BUDGET } from "./shrink";
 import { runCheck } from "./runner";
 import { failureSignature, signaturesMatch } from "./signature";
+import { ruleHash } from "./rule";
 
 export interface Recurrence {
   id: string;
@@ -26,12 +27,20 @@ export interface CaptureReport {
   recurred: Recurrence[];
   /** Bindings dropped because their subject has no check configured. */
   unconfigured: string[];
+  /** Counterexamples whose repeated runs disagreed — a flaky check. */
+  flaky: string[];
 }
 
 export interface CaptureOptions {
   /** Reopen a retired row when its counterexample comes back. */
   reopen?: boolean;
   actor?: string;
+  /**
+   * How many times a failure must reproduce before it enters the corpus.
+   * Default 2, per the design: "a failure must reproduce twice to enter the
+   * corpus. Flakes are the fastest way to make a corpus untrustworthy."
+   */
+  confirmations?: number;
 }
 
 interface FastCheckCapture {
@@ -143,7 +152,8 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
   const corpusPath = path.join(ratchetDir, "corpus.jsonl");
   const journalPath = path.join(ratchetDir, "journal.jsonl");
   const commit = currentCommit(cwd);
-  const report: CaptureReport = { added: [], skipped: [], recurred: [], unconfigured: [] };
+  const report: CaptureReport = { added: [], skipped: [], recurred: [], unconfigured: [], flaky: [] };
+  const confirmations = Math.max(1, opts.confirmations ?? 2);
   const rows = foldRows(readEvents(corpusPath));
 
   for (const b of bindings) {
@@ -158,7 +168,7 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
       continue;
     }
 
-    const runOpts = { cwd, shell: subj.shell, timeoutMs: subj.timeoutMs, testName: b.test };
+    const runOpts = { cwd, shell: subj.shell, timeoutMs: subj.timeoutMs, testName: b.test, homeDir: ratchetDir };
 
     // Discrimination, for every source: the counterexample must reproduce
     // against the current code before it is worth remembering.
@@ -179,6 +189,25 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
     }
 
     const signature = failureSignature(confirm.reason, confirm.code);
+
+    // Discrimination, part two: the same failure must reproduce. A check that
+    // fails intermittently would otherwise be stored on whichever run happened
+    // to be red, and then make `verify` flaky forever. Disagreement between
+    // runs is reported as a flaky check, not as a counterexample.
+    let flaky = false;
+    for (let i = 1; i < confirmations; i++) {
+      const again = runCheck(subj.check, b.input, runOpts);
+      if (again.outcome !== "fail" || !signaturesMatch(failureSignature(again.reason, again.code), signature)) {
+        report.flaky.push(
+          `${b.subject} ${stableStringify(b.input)} (run 1 failed with "${confirm.reason}", run ${i + 1} gave "${again.reason}" — not stored)`
+        );
+        flaky = true;
+        break;
+      }
+    }
+    if (flaky) continue;
+
+    const rule = ruleHash(b.subject, subj, cwd);
 
     // Cause-preserving reduction. A smaller input is only accepted when it
     // fails the *same way*; otherwise reduction can walk off the captured
@@ -246,6 +275,7 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
           input,
           test: b.test,
           signature,
+          ruleHash: rule,
           reason: `recurred: ${reason}`,
           actor: opts.actor ?? "ratchet",
           commit,
@@ -275,6 +305,7 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
       input,
       reason,
       signature,
+      ruleHash: rule,
       test: b.test,
       seed: b.seed,
       commit,
@@ -288,6 +319,7 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
       status: "active",
       test: b.test,
       signature,
+      ruleHash: rule,
       source: b.source,
       capturedAt: at,
       lastOp: "capture",

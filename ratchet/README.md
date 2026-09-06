@@ -1,14 +1,15 @@
-# Ratchet — v0.3 prototype
+# Ratchet — v0.4 prototype
 
 Regression memory for AI-assisted development. The design sketch is
 [../RATCHET.md](../RATCHET.md); this folder is the first working slice.
 
 > **Status.** All 21 issues from the v0 review
-> ([../ISSUES_RATCHET.md](../ISSUES_RATCHET.md)) are closed. v0.2 fixed the
-> seven correctness and security defects; v0.3 adds the third check outcome
-> (`na`), `fsck`, `list`, `show`, `--json`, parallel `verify` (3.1× faster),
-> the packaging fix, and a generated demo that is reproducible from a clone.
-> 33 tests, including a regression test per defect.
+> ([../ISSUES_RATCHET.md](../ISSUES_RATCHET.md)) are closed, and v0.4 closes
+> the design gaps that remained after them: owning-rule hashes and quarantine,
+> the second confirmation run, `ratchet replay` with sampling and halving,
+> `ratchet validate`, and self-hosting. The ratchet now runs under itself —
+> its own invariants are validated against the commits where its own bugs
+> lived. 47 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; everything is a file git already knows how to commit.
@@ -83,6 +84,7 @@ content-addressed; any unambiguous prefix works where an id is expected.
 - `captureProperty` — binds a fast-check property name to this subject.
 - `shell` — run `check` through a shell. Off by default.
 - `timeoutMs` — per-subject timeout. Default 30000.
+- `owns` — files whose contents define this subject's rule (see below).
 
 ### How checks are executed
 
@@ -95,6 +97,16 @@ Set `"shell": true` for pipes, `&&`, or a `.cmd`/`.bat` entry point. The
 command string is then your own committed config, at the same trust level as
 a Makefile target — but the test name is still never interpolated into it, so
 `{test}` is refused in shell mode and the check must read `RATCHET_TEST`.
+
+### The frozen instrument
+
+A check written as `node check.js` runs whatever `check.js` the checked-out
+tree contains — which means replay measures each commit with that commit's own
+instrument, and readings across history are not comparable. Writing it as
+`node {home}/tools/probe.js` instead resolves `{home}` to the ratchet home,
+which history commands carry *out* of the working tree. The same script then
+measures every commit. `RATCHET_HOME` is exported to every check for the same
+purpose.
 
 ## Capture sources
 
@@ -162,6 +174,30 @@ hand-edited or corrupted row is mechanically detectable.
 `verify` refuses to run at all against a corpus with unreadable lines — a row
 hidden behind a parse error is a false pass — and names the line.
 
+## The owning rule, and quarantine
+
+A corpus row is only meaningful relative to the instrument that produced it.
+Each row records the hash of its owning rule — the check command plus the
+contents of whatever files the subject declares it `owns`:
+
+```json
+"galaxy-structure": {
+  "check": "node {home}/tools/probe.js galaxy-structure",
+  "owns": [".ratchet/tools/probe.js"]
+}
+```
+
+| | row fails |
+|---|---|
+| rule unchanged | **hard block** — this is a regression |
+| rule edited since capture | **quarantine** — routed to review, does not fail the build |
+
+When the heuristic moves, the quality-control analysis moves with it, and a
+failure no longer cleanly means the code regressed. Two ways out, both on the
+record: `ratchet reaffirm <id>` re-pins the row to the current rule (the
+expectation still stands), and `ratchet accept <id>` retires it (it does not).
+What is never allowed is re-deriving the expectation silently.
+
 ## The accept ceremony
 
 A failing active row is a hard block — `ratchet verify` exits 1. When the
@@ -173,6 +209,60 @@ Accepting says "this behavior is intended *now*", not "never mention this
 input again". If the same counterexample fails again later, `capture` reports
 it as a recurrence — citing who retired it and why — and exits nonzero.
 `--reopen` puts it back into enforcement and journals that decision.
+
+## Replay across history
+
+`ratchet replay --good <ref> [--bad <ref>]` runs today's checks against
+historical commits and reports the pass/fail curve. Dense replay does not
+scale past small repositories, so a sampling policy comes first and halving
+closes the window:
+
+```
+$ ratchet replay --good v1.0 --every week --subjects --setup "npm ci"
+replay: 14 of 312 commits (one per week)
+environment: node v20.9.0 on win32/x64
+
+  ✓ 4abc1d54  2026-03-01  5 pass, 0 fail  ...
+  ✗ 9f53b4d2  2026-03-08  4 pass, 1 fail  widescreen refactor
+  ...
+transition between 4abc1d54 and 9f53b4d2, halved in 3 probes:
+  first bad commit: 9f53b4d2  widescreen refactor
+```
+
+- `--every N` samples every Nth commit; `--every day|week` takes the first
+  commit in each period; dense is the default.
+- `--subjects` replays the configured subjects rather than the corpus rows.
+  A corpus row is a counterexample that must not fail again; a subject is a
+  standing invariant, which has no counterexample while it holds. Both are
+  the same check contract pointed at history.
+- `--setup "npm ci"` prepares each worktree. A setup failure is reported as
+  `na-env`, not as a failure: an old tree that today's toolchain can no
+  longer build is dependency rot, not a regression. The environment each run
+  happened under is recorded alongside the results.
+
+The honest limit: replay answers "does this commit pass today's checks under
+today's environment", not "what did this commit do at the time". Run it inside
+a pinned CI image for its era if you need the latter.
+
+## Validating a subject
+
+> Every subject must be proven to fail on at least one known past bug before
+> it can be captured from. A subject that passes through history's known bugs
+> is too weak.
+
+```
+$ ratchet validate galaxy-structure --known-bad 9f53b4d --known-good HEAD
+subject: galaxy-structure  (rule fd592028262960d5)
+  ✓ known-bad 9f53b4d2 "widescreen refactor" — fails as required: A(m=2) 2.8e-3 at the noise floor
+  ✓ known-good f4a9f846 "..." — passes as required
+
+validated — proof recorded in the journal against this rule hash
+```
+
+The proof is tied to the rule hash it was proven under, so editing the check
+invalidates its own validation. This is the mechanical answer to "who checks
+the checkers"; as a convention rather than a command it erodes on the first
+busy afternoon.
 
 ## Bisect (retroactive replay)
 
@@ -201,6 +291,39 @@ allocation and dedup the same operation. Events are replayed in timestamp
 order, not file order, so a merge that lands an `accept` above its `capture`
 still retires the row.
 
+## Self-hosting
+
+The ratchet runs under itself. [`../.ratchet/`](../.ratchet) configures five
+subjects over this repository, each a check of the checker, each invoked
+through `{home}` so it is carried across history rather than read from the
+tree it measures:
+
+| subject | asserts | catches |
+|---|---|---|
+| `corpus-merge-safe` | two branches' captures both survive a merge | R3 |
+| `fold-is-order-independent` | an accept above its capture still retires the row | R4 |
+| `reduction-preserves-cause` | a stored row reproduces the bug that was captured | R5 |
+| `recurrence-is-visible` | an accepted row's return is surfaced, not deduplicated | R2 |
+| `stringify-injective` | distinct values never share a dedup key | R20 |
+
+All five are validated against `4abc1d5`, the last v0 commit, where those bugs
+actually lived. Replayed across this repository's own history:
+
+```
+$ ratchet replay --good 4abc1d5^ --subjects --setup "node .ratchet/tools/build.js"
+  ✗ 4abc1d54  ratchet experiments                     0 pass, 5 fail
+  ✗ 0d710eb0  fix the seven safety defects (v0.2)     4 pass, 1 fail
+  ✓ f4a9f846  close the remaining issues (v0.3)       5 pass, 0 fail
+```
+
+The one still failing at v0.2 is `stringify-injective`, which is R20 — fixed in
+v0.3. The replay reconstructs the fix history without being told it.
+
+Two of these five subjects failed their own validation on the first attempt:
+they tested `minimize` and `foldRows` in isolation, while the defects lived in
+the *capture* path that calls them, so they passed straight through the bug.
+That is the protocol working as intended.
+
 ## Build & test
 
 ```
@@ -209,7 +332,7 @@ npm run build
 npm test
 ```
 
-33 tests, including one regression test per defect closed from the v0 review.
+47 tests, including one regression test per defect closed from the v0 review.
 The demo is generated by `node demo/setup.js`; see [demo/README.md](demo/README.md).
 
 ## What this prototype still leaves out

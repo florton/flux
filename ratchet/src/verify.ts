@@ -5,6 +5,7 @@ import { activeRows, readCorpus, stableStringify } from "./corpus";
 import type { RatchetConfig, RowState, VerifyResult } from "./types";
 import { runCheckAsync, pool } from "./runner";
 import { failureSignature, signaturesMatch } from "./signature";
+import { ruleHash } from "./rule";
 
 export interface VerifyOptions {
   row?: string;
@@ -22,9 +23,10 @@ interface ResolvedCheck {
   shell?: boolean;
   timeoutMs?: number;
   testName?: string;
+  homeDir?: string;
 }
 
-function resolveCheck(config: RatchetConfig, row: RowState): ResolvedCheck {
+function resolveCheck(config: RatchetConfig, row: RowState, homeDir: string): ResolvedCheck {
   const subj = config.subjects[row.subject];
   if (!subj) {
     throw new Error(`no subject config for "${row.subject}"`);
@@ -38,6 +40,7 @@ function resolveCheck(config: RatchetConfig, row: RowState): ResolvedCheck {
     shell: subj.shell,
     timeoutMs: subj.timeoutMs,
     testName: row.test,
+    homeDir,
   };
 }
 
@@ -69,21 +72,45 @@ export async function verify(cwd: string, opts: VerifyOptions): Promise<VerifyRe
   if (opts.row) rows = rows.filter((r) => r.id === opts.row || r.id.startsWith(opts.row!));
   if (opts.subject) rows = rows.filter((r) => r.subject === opts.subject);
 
+  // One hash per subject, not per row: the rule is a property of the subject.
+  const ruleCache = new Map<string, string>();
+  const currentRule = (subject: string): string | undefined => {
+    const subj = config.subjects[subject];
+    if (!subj) return undefined;
+    let h = ruleCache.get(subject);
+    if (h === undefined) {
+      h = ruleHash(subject, subj, cwd);
+      ruleCache.set(subject, h);
+    }
+    return h;
+  };
+
   const results = await pool(rows, opts.concurrency ?? defaultConcurrency(), async (row): Promise<VerifyResult> => {
     try {
-      const { command, input, shell, timeoutMs, testName } = resolveCheck(config, row);
-      const res = await runCheckAsync(command, input, { cwd, shell, timeoutMs, testName });
+      const { command, input, shell, timeoutMs, testName, homeDir } = resolveCheck(config, row, ratchetDir);
+      const res = await runCheckAsync(command, input, { cwd, shell, timeoutMs, testName, homeDir });
       const drift =
         res.outcome === "fail" && !res.errored && row.signature !== undefined
           ? !signaturesMatch(failureSignature(res.reason, res.code), row.signature)
           : false;
+
+      // Rule unchanged and row fails -> hard block, this is a regression.
+      // Rule changed and row fails  -> quarantine, routed to review: the
+      // instrument moved, so the failure no longer cleanly means the code
+      // regressed. Re-deriving the expectation silently is what the ceremony
+      // exists to prevent.
+      const rule = currentRule(row.subject);
+      const ruleChanged = row.ruleHash !== undefined && rule !== undefined && row.ruleHash !== rule;
+      const outcome = res.outcome === "fail" && ruleChanged ? "quarantine" : res.outcome;
+
       return {
         id: row.id,
         subject: row.subject,
-        outcome: res.outcome,
-        pass: res.outcome === "pass",
+        outcome,
+        pass: outcome === "pass",
         reason: res.reason,
         signatureDrift: drift,
+        ruleChanged,
       };
     } catch (err) {
       return {
@@ -104,11 +131,12 @@ export async function verify(cwd: string, opts: VerifyOptions): Promise<VerifyRe
   return results;
 }
 
-export function countOutcomes(results: VerifyResult[]): { pass: number; fail: number; na: number } {
+export function countOutcomes(results: VerifyResult[]): { pass: number; fail: number; na: number; quarantine: number } {
   return {
     pass: results.filter((r) => r.outcome === "pass").length,
     fail: results.filter((r) => r.outcome === "fail").length,
     na: results.filter((r) => r.outcome === "na").length,
+    quarantine: results.filter((r) => r.outcome === "quarantine").length,
   };
 }
 
@@ -120,16 +148,27 @@ function printResults(results: VerifyResult[], byId: Map<string, RowState>): voi
       console.log(`✓ ${r.id} ${r.subject}`);
     } else if (r.outcome === "na") {
       console.log(`− ${r.id} ${r.subject}${shown} — n/a: ${r.reason}`);
+    } else if (r.outcome === "quarantine") {
+      console.log(`? ${r.id} ${r.subject}${shown} — quarantined: ${r.reason}`);
+      console.log(`    behavior changed under an edited rule — review, then \`ratchet reaffirm ${r.id}\` or \`ratchet accept ${r.id}\``);
     } else {
       const drift = r.signatureDrift ? "  [!] different failure than the one captured" : "";
       console.log(`✗ ${r.id} ${r.subject}${shown} — ${r.reason ?? "failed"}${drift}`);
     }
   }
-  const { pass, fail, na } = countOutcomes(results);
+  const { pass, fail, na, quarantine } = countOutcomes(results);
   const parts = [`${pass}/${results.length} rows pass`];
   if (fail) parts.push(`${fail} failing`);
+  if (quarantine) parts.push(`${quarantine} quarantined`);
   if (na) parts.push(`${na} n/a`);
   console.log(`\n${parts.join(", ")}`);
+
+  const staleRule = results.filter((r) => r.ruleChanged && r.outcome === "pass").length;
+  if (staleRule > 0) {
+    console.log(
+      `${staleRule} passing row(s) are pinned to an older version of their rule — \`ratchet reaffirm\` to re-pin them`
+    );
+  }
 
   const drifted = results.filter((r) => r.outcome === "fail" && r.signatureDrift).length;
   if (drifted > 0) {

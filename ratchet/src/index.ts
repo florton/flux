@@ -4,9 +4,11 @@ import * as path from "path";
 import { findRoot } from "./paths";
 import { capture } from "./capture";
 import { verify, verifyAndExit, defaultConcurrency } from "./verify";
-import { accept, reopen } from "./accept";
+import { accept, reopen, reaffirm } from "./accept";
 import { report, reportData } from "./report";
 import { bisect } from "./bisect";
+import { replay, formatReplay } from "./replay";
+import { validate, formatValidate } from "./validate";
 import { fsck, formatFsck } from "./fsck";
 import { listRows, formatList, showRow, formatRow } from "./inspect";
 import { appendJournal } from "./journal";
@@ -22,14 +24,20 @@ function usage(): string {
   ratchet show <id>                a row's full history and journal entries
   ratchet accept <id> --reason "..." [--actor name]
   ratchet reopen <id> --reason "..." [--actor name]
+  ratchet reaffirm <id> --reason "..."   re-pin a row to an edited rule
   ratchet note --text "..." [--actor name]
   ratchet report                   corpus stats and churn summary
   ratchet fsck                     corpus and journal integrity check
   ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
+  ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects]
+  ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]
 
 Every command takes --home <dir> and --json. Row ids are content-addressed;
 any unambiguous prefix works. A check may exit 125 to report "not applicable
-at this commit", which is neither a pass nor a failure.
+at this commit", which is neither a pass nor a failure. A row whose owning
+rule was edited since capture is quarantined rather than treated as a
+regression: review it, then "reaffirm" (the expectation stands) or "accept"
+(it does not).
 `;
 }
 
@@ -61,6 +69,7 @@ interface Args {
 const VALUE_FLAGS = new Set([
   "--row", "--subject", "--home", "--reason", "--actor",
   "--good", "--bad", "--setup", "--text", "--status", "--jobs",
+  "--every", "--known-bad", "--known-good", "--input", "--confirm",
 ]);
 
 function parseArgs(args: string[]): Args {
@@ -142,7 +151,11 @@ async function main(): Promise<void> {
       const rep = capture(
         cwd,
         positionals.map((f) => path.resolve(cwd, f)),
-        { reopen: bools.has("--reopen"), actor: flags.get("--actor") ?? "human" }
+        {
+          reopen: bools.has("--reopen"),
+          actor: flags.get("--actor") ?? "human",
+          confirmations: flags.has("--confirm") ? parseInt(flags.get("--confirm")!, 10) : undefined,
+        }
       );
       const unhandled = rep.recurred.filter((r) => !r.reopened).length;
       if (json) {
@@ -150,6 +163,7 @@ async function main(): Promise<void> {
       } else {
         for (const id of rep.added) console.log(`+ ${id}`);
         for (const s of rep.skipped) console.log(`skip: ${s}`);
+        for (const s of rep.flaky) console.log(`flaky: ${s}`);
         for (const s of rep.unconfigured) {
           console.log(`not captured: "${s}" has no subject in .ratchet/config.json — add one, then capture again`);
         }
@@ -164,6 +178,7 @@ async function main(): Promise<void> {
         }
         console.log(
           `\n${rep.added.length} added, ${rep.skipped.length} skipped` +
+            (rep.flaky.length ? `, ${rep.flaky.length} flaky` : "") +
             (rep.recurred.length ? `, ${rep.recurred.length} recurred` : "") +
             (rep.unconfigured.length ? `, ${rep.unconfigured.length} unconfigured` : "")
         );
@@ -215,7 +230,8 @@ async function main(): Promise<void> {
     }
 
     case "accept":
-    case "reopen": {
+    case "reopen":
+    case "reaffirm": {
       const cwd = requireRoot();
       const id = positionals[0];
       const reason = flags.get("--reason");
@@ -225,11 +241,13 @@ async function main(): Promise<void> {
       }
       const actor = flags.get("--actor") ?? "human";
       if (command === "accept") {
-        const full = accept(cwd, id, reason, actor);
-        console.log(`accepted ${full} — expectation retired, audit trail retained`);
+        console.log(`accepted ${accept(cwd, id, reason, actor)} — expectation retired, audit trail retained`);
+      } else if (command === "reopen") {
+        console.log(`reopened ${reopen(cwd, id, reason, actor)} — row is enforcing again`);
       } else {
-        const full = reopen(cwd, id, reason, actor);
-        console.log(`reopened ${full} — row is enforcing again`);
+        console.log(
+          `reaffirmed ${reaffirm(cwd, id, reason, actor)} — re-pinned to the current rule, quarantine lifted`
+        );
       }
       break;
     }
@@ -284,6 +302,52 @@ async function main(): Promise<void> {
         result,
         result.notes.map((n) => `note: ${n}`).concat(`first bad commit: ${result.firstBad}  (${result.probes} probes)`).join("\n")
       );
+      break;
+    }
+
+    case "replay": {
+      const cwd = requireRoot();
+      const good = flags.get("--good");
+      const bad = flags.get("--bad") ?? "HEAD";
+      if (!good) {
+        console.error('usage: ratchet replay --good ref [--bad ref] [--every N|day|week]');
+        process.exit(1);
+      }
+      const result = await replay(cwd, {
+        good,
+        bad,
+        row: flags.get("--row"),
+        subject: flags.get("--subject"),
+        every: flags.get("--every"),
+        setup: flags.get("--setup"),
+        ratchetHome: homeDir(cwd),
+        noPinpoint: bools.has("--no-pinpoint"),
+        subjects: bools.has("--subjects"),
+      });
+      emit(json, result, formatReplay(result));
+      if (result.samples.some((x) => x.status === "fail")) process.exit(1);
+      break;
+    }
+
+    case "validate": {
+      const cwd = requireRoot();
+      const subject = positionals[0];
+      const knownBad = flags.get("--known-bad");
+      if (!subject || !knownBad) {
+        console.error('usage: ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]');
+        process.exit(1);
+      }
+      const raw = flags.get("--input");
+      const result = await validate(cwd, subject, {
+        knownBad,
+        knownGood: flags.get("--known-good"),
+        input: raw === undefined ? undefined : JSON.parse(raw),
+        setup: flags.get("--setup"),
+        ratchetHome: homeDir(cwd),
+        actor: flags.get("--actor") ?? "human",
+      });
+      emit(json, result, formatValidate(result));
+      if (!result.valid) process.exit(1);
       break;
     }
 
