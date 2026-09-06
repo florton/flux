@@ -1,6 +1,7 @@
-import { spawnSync } from "child_process";
+import { spawn, spawnSync, SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { NA_EXIT_CODE, type CheckOutcome } from "./types";
 
 export interface RunOptions {
   cwd: string;
@@ -12,6 +13,8 @@ export interface RunOptions {
 }
 
 export interface RunResult {
+  outcome: CheckOutcome;
+  /** True only when the check passed. */
   pass: boolean;
   reason: string;
   /** Exit status, or null when the process was killed or never started. */
@@ -81,72 +84,138 @@ function resolveExecutable(cmd: string, cwd: string): string {
   return cmd;
 }
 
-export function runCheck(command: string, input: unknown, opts: RunOptions): RunResult {
+interface Invocation {
+  exe: string;
+  args: string[];
+  options: SpawnOptions & { input: string };
+}
+
+function fail(reason: string): RunResult {
+  return { outcome: "fail", pass: false, reason, code: null, errored: true };
+}
+
+/** Build the spawn call, or return the RunResult that explains why we cannot. */
+function invocation(command: string, input: unknown, opts: RunOptions): Invocation | RunResult {
   const env = { ...process.env };
   if (opts.testName !== undefined) env.RATCHET_TEST = opts.testName;
 
-  const common = {
+  const options = {
     cwd: opts.cwd,
     input: JSON.stringify(input) ?? "null",
-    encoding: "utf8" as const,
-    timeout: opts.timeoutMs ?? 30_000,
     env,
+    timeout: opts.timeoutMs ?? 30_000,
   };
 
-  let result;
   if (opts.shell) {
     // The command string is the project's own committed config, at the same
     // trust level as a Makefile target. The test name is NOT interpolated
     // into it — it reaches the check through RATCHET_TEST only.
     if (command.includes("{test}")) {
-      return {
-        pass: false,
-        reason: '{test} substitution is not available with "shell": true — read RATCHET_TEST instead',
-        code: null,
-        errored: true,
-      };
+      return fail('{test} substitution is not available with "shell": true — read RATCHET_TEST instead');
     }
-    result = spawnSync(command, { ...common, shell: true });
-  } else {
-    let argv: string[];
-    try {
-      argv = tokenize(command);
-    } catch (err) {
-      return { pass: false, reason: String(err), code: null, errored: true };
-    }
-    if (argv.length === 0) {
-      return { pass: false, reason: "empty check command", code: null, errored: true };
-    }
-    // Whole-token substitution: the test name becomes exactly one argv
-    // element and can never split into extra arguments or shell syntax.
-    if (opts.testName !== undefined) {
-      argv = argv.map((t) => (t.includes("{test}") ? t.split("{test}").join(opts.testName!) : t));
-    }
-    const exe = resolveExecutable(argv[0], opts.cwd);
-    if (/\.(cmd|bat)$/i.test(exe)) {
-      return {
-        pass: false,
-        reason: `${argv[0]} resolves to a ${path.extname(exe)} script, which cannot be spawned directly — set "shell": true for this subject`,
-        code: null,
-        errored: true,
-      };
-    }
-    result = spawnSync(exe, argv.slice(1), { ...common, shell: false });
+    return { exe: command, args: [], options: { ...options, shell: true } };
   }
 
-  if (result.error) {
-    return { pass: false, reason: result.error.message, code: null, errored: true };
+  let argv: string[];
+  try {
+    argv = tokenize(command);
+  } catch (err) {
+    return fail(String(err));
   }
-  if (result.status === null) {
-    return { pass: false, reason: `killed: ${result.signal ?? "timeout"}`, code: null, errored: true };
+  if (argv.length === 0) return fail("empty check command");
+
+  // Whole-token substitution: the test name becomes exactly one argv element
+  // and can never split into extra arguments or shell syntax.
+  if (opts.testName !== undefined) {
+    argv = argv.map((t) => (t.includes("{test}") ? t.split("{test}").join(opts.testName!) : t));
   }
-  const stdout = (result.stdout ?? "").trim();
-  const stderr = (result.stderr ?? "").trim();
-  const pass = result.status === 0;
+  const exe = resolveExecutable(argv[0], opts.cwd);
+  if (/\.(cmd|bat)$/i.test(exe)) {
+    return fail(
+      `${argv[0]} resolves to a ${path.extname(exe)} script, which cannot be spawned directly — set "shell": true for this subject`
+    );
+  }
+  return { exe, args: argv.slice(1), options: { ...options, shell: false } };
+}
+
+function interpret(status: number | null, signal: string | null, stdout: string, stderr: string): RunResult {
+  if (status === null) {
+    return { outcome: "fail", pass: false, reason: `killed: ${signal ?? "timeout"}`, code: null, errored: true };
+  }
+  const out = stdout.trim();
+  const err = stderr.trim();
+  if (status === NA_EXIT_CODE) {
+    return { outcome: "na", pass: false, reason: out || err || "not applicable at this commit", code: status, errored: false };
+  }
+  const pass = status === 0;
   return {
+    outcome: pass ? "pass" : "fail",
     pass,
-    reason: pass ? stdout : stdout || stderr || `exit ${result.status}`,
-    code: result.status,
+    reason: pass ? out : out || err || `exit ${status}`,
+    code: status,
     errored: false,
   };
+}
+
+export function runCheck(command: string, input: unknown, opts: RunOptions): RunResult {
+  const inv = invocation(command, input, opts);
+  if ("outcome" in inv) return inv;
+
+  const result = spawnSync(inv.exe, inv.args, { ...inv.options, encoding: "utf8" });
+  if (result.error) {
+    return { outcome: "fail", pass: false, reason: result.error.message, code: null, errored: true };
+  }
+  return interpret(result.status, result.signal, result.stdout ?? "", result.stderr ?? "");
+}
+
+export function runCheckAsync(command: string, input: unknown, opts: RunOptions): Promise<RunResult> {
+  const inv = invocation(command, input, opts);
+  if ("outcome" in inv) return Promise.resolve(inv);
+
+  return new Promise((resolve) => {
+    const { input: stdin, timeout, ...spawnOpts } = inv.options;
+    const child = spawn(inv.exe, inv.args, { ...spawnOpts, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finish = (r: RunResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ outcome: "fail", pass: false, reason: `killed: timeout after ${timeout}ms`, code: null, errored: true });
+    }, timeout as number);
+
+    child.stdout?.on("data", (d) => (stdout += d));
+    child.stderr?.on("data", (d) => (stderr += d));
+    child.on("error", (err) =>
+      finish({ outcome: "fail", pass: false, reason: err.message, code: null, errored: true })
+    );
+    child.on("close", (code, signal) => finish(interpret(code, signal, stdout, stderr)));
+
+    child.stdin?.on("error", () => {
+      /* a check that never reads stdin is fine */
+    });
+    child.stdin?.end(stdin);
+  });
+}
+
+/** Run `tasks` with bounded concurrency, preserving input order in the result. */
+export async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }

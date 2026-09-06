@@ -15,11 +15,12 @@ and two silent-false-pass paths, and the false passes break the specific promise
 the whole system is built on: that a captured counterexample keeps enforcing
 forever. This is a good v0; it is not yet safe to point at a shared repo.
 
-**Update 2026-09-06 — v0.2.** R1–R7 are fixed, each with a regression test, and
-each original repro below re-run against the new build to confirm it is closed.
-R11, R12, R16 and R17 fell out of the same work; R8, R13 and R14 are partly
-addressed. Fourteen issues remain open. The repro transcripts are kept as
-written — they are the record of what the defect actually was.
+**Update 2026-09-06 — v0.2 then v0.3.** All 21 entries are now closed. v0.2
+fixed R1–R7, the correctness and security tier, each with a regression test and
+each original repro re-run against the new build. v0.3 closed the remainder:
+the `na` outcome, `fsck`, `list`/`show`, `--json`, parallel `verify`, the
+packaging fix, and a generated demo. 33 tests. The repro transcripts below are
+kept as written — they are the record of what each defect actually was.
 
 | # | Severity | Status | Issue | Location |
 |---|---|---|---|---|
@@ -30,20 +31,20 @@ written — they are the record of what the defect actually was.
 | R5 | high | **fixed** | Minimization slips to a different bug and loses the real one | `src/shrink.ts:50`, `src/capture.ts:152` |
 | R6 | high | **fixed** | `bisect` strands the user's checkout on any error | `src/bisect.ts:38` |
 | R7 | high | **fixed** | JUnit path bypasses discrimination and dedup entirely | `src/capture.ts:121` |
-| R8 | medium | **partial** | No error handling; one bad line bricks every command | `src/index.ts`, `src/corpus.ts:15` |
-| R9 | medium | **open** | `verify` costs ~62 ms/row, serial, unbounded corpus growth | `src/verify.ts:41`, `src/runner.ts:19` |
-| R10 | medium | **open** | `bin`/`main` point at a path the build never emits | `package.json` |
+| R8 | medium | **fixed** | No error handling; one bad line bricks every command | `src/index.ts`, `src/corpus.ts:15` |
+| R9 | medium | **fixed** | `verify` costs ~62 ms/row, serial, unbounded corpus growth | `src/verify.ts:41`, `src/runner.ts:19` |
+| R10 | medium | **fixed** | `bin`/`main` point at a path the build never emits | `package.json` |
 | R11 | medium | **fixed** | Flag values are parsed as positionals | `src/index.ts:105,118,155` |
 | R12 | medium | **fixed** | `--home` honored by 2 of 8 commands | `src/index.ts:98,148` |
-| R13 | medium | **partial** | The accept ceremony cannot show what it is retiring | `src/verify.ts:56,70` |
-| R14 | medium | **partial** | Config-missing and check-crashed both score as `fail` | `src/verify.ts:16` |
-| R15 | low | **open** | No machine-readable output; `json` option declared, never read | `src/verify.ts:11` |
+| R13 | medium | **fixed** | The accept ceremony cannot show what it is retiring | `src/verify.ts:56,70` |
+| R14 | medium | **fixed** | Config-missing and check-crashed both score as `fail` | `src/verify.ts:16` |
+| R15 | low | **fixed** | No machine-readable output; `json` option declared, never read | `src/verify.ts:11` |
 | R16 | low | **fixed** | Dead code and a dishonest cast | `src/verify.ts:70`, `src/accept.ts:22,46` |
 | R17 | low | **fixed** | `nextRowId` re-parses the corpus per row: O(n²) capture | `src/paths.ts:24` |
-| R18 | low | **open** | `accept`/`reopen` behave asymmetrically on no-op | `src/accept.ts` |
-| R19 | low | **open** | Demo and field-experiment artifacts are not committed | `ratchet/.gitignore:3` |
-| R20 | low | **open** | `stableStringify` is unsound off the JSON value domain (latent) | `src/corpus.ts:5` |
-| R21 | low | **open** | No `engines` field despite Node 18+ requirements | `package.json` |
+| R18 | low | **fixed** | `accept`/`reopen` behave asymmetrically on no-op | `src/accept.ts` |
+| R19 | low | **fixed** | Demo and field-experiment artifacts are not committed | `ratchet/.gitignore:3` |
+| R20 | low | **fixed** | `stableStringify` is unsound off the JSON value domain (latent) | `src/corpus.ts:5` |
+| R21 | low | **fixed** | No `engines` field despite Node 18+ requirements | `package.json` |
 
 ---
 
@@ -111,27 +112,68 @@ is resolved once in `main()` and now applies to every command.
 failing row's input. The `as "fast-check"` cast is replaced with the honest
 union type.
 
-### Partly addressed
+## Resolved in v0.3
 
-**R8.** A top-level handler turns errors into one actionable line instead of
-a stack trace. Still open: `readEvents` throws on a malformed line, so a
-corrupt corpus remains a hard stop, and there is no `ratchet fsck`.
+**R8 — corpus robustness.** `readCorpus` parses per line and collects malformed
+ones instead of throwing; a top-level handler turns errors into one actionable
+line. `ratchet fsck` reports unreadable lines, orphaned accept/reopen events,
+unconfigured subjects, and **rows whose id does not match their own content** —
+a check only possible because ids are content-addressed, and the one that
+catches hand-editing. `verify` still refuses to run against a corpus it cannot
+fully read, because a row hidden behind a parse error is a false pass; it now
+names the line instead of printing a stack.
 
-**R13.** `verify` now prints the failing row's input, so the operator can see
-what they are about to retire. Still open: no `ratchet show <id>` or
-`ratchet list`.
+**R9 — throughput.** `verify` runs rows through an async pool, default
+concurrency = CPU count capped at 8, `--jobs N` to override. Measured on the
+same 200-row corpus as the original finding: **12514 ms → 4019 ms, 3.1×**.
+Per-subject `timeoutMs` replaces the hardcoded 30 s. Batching several inputs
+into one process was considered and rejected: it would change the check
+contract, which is the most valuable thing in the design.
 
-**R14.** Unconfigured subjects no longer enter the corpus, so the specific
-mechanism that produced a permanently red build is gone. Still open: there is
-no `na` outcome, so a crashed check is still scored as a failure.
+**R10, R21 — packaging.** `bin` and `main` point at `dist/src/index.js`, which
+is what `tsc` actually emits; `engines` declares node >= 18; `files` limits the
+published surface.
 
-### Beyond the agreed scope
+**R13 — the ceremony can see what it retires.** `ratchet list` shows every row
+with status and input; `ratchet show <id>` shows one row's input, witness, full
+event history with actors and reasons, and its journal entries. Both accept id
+prefixes.
 
-Two changes were made that the safety tier did not strictly require, both
-small and both noted here rather than left silent: the top-level error
-handler (R8, partial) and printing the row input in `verify` output (R13,
-partial). Both exist because the new error paths — ambiguous id prefixes,
-non-ancestor refs, recurrences — are unreadable as stack traces.
+**R14 — the third outcome.** A check may exit **125** to report "not applicable
+at this commit". `na` is neither pass nor failure, does not fail the build, and
+is counted separately in `verify` and `--json`. A check that cannot be
+*spawned* deliberately stays a failure: that is indistinguishable from a broken
+config, and greening it would be the false pass this tool exists to prevent.
+The `na(env)` vs `na(code)` split from [NEXT_STEPS.md](NEXT_STEPS.md) needs
+per-run environment recording and is not attempted here.
+
+**R15 — machine-readable output.** `--json` on every command; `verify --json`
+emits per-row results plus outcome counts.
+
+**R18 — symmetry.** `reopen` on an active row is refused, as `accept` on an
+archived one already was, so no-ops stop appending to the decision log.
+
+**R19 — reproducible demo.** `demo/setup.js` generates the five-commit history
+from scratch into `demo/repo/`; the generator and the walkthrough are
+committed, the generated repository is not. A nested `.git` cannot live inside
+this repository, which is why the demo was ignored in the first place. The
+generated history was verified to carry the same bug and yield the same bisect
+answer, and its `check.js` now prints a failure reason — so the demo
+demonstrates the strong form of the witness rather than the degraded one. The
+field-experiment check scripts remain uncommitted: they live in the target
+repos and are out of scope here.
+
+**R20 — stableStringify.** Values outside the JSON domain get distinct
+sentinels (`<undefined>`, `<NaN>`, `<date:...>`, `<map:...>`) instead of
+aliasing onto `null` or `{}`, and the function no longer returns `undefined`
+against a `string` return type.
+
+### Beyond the original scope
+
+Two v0.2 changes were not strictly required by the safety tier and are noted
+rather than left silent: the top-level error handler and printing the row input
+in `verify` output. Both exist because the new error paths — ambiguous id
+prefixes, non-ancestor refs, recurrences — are unreadable as stack traces.
 
 ---
 
@@ -365,7 +407,7 @@ subjects with no config rather than storing them.
 
 ### R8. No error handling; one malformed line bricks every command
 
-**Severity: medium. Status: PARTLY FIXED in v0.2. Reproduced.** `src/index.ts:49`, `src/corpus.ts:15`
+**Severity: medium. Status: FIXED in v0.2. Reproduced.** `src/index.ts:49`, `src/corpus.ts:15`
 
 `main()` has no try/catch, and there is no `JSON.parse` guard in `readEvents`,
 `readJournal`, `nextRowId`, or `loadConfig`. A single truncated line — a crashed
@@ -394,7 +436,7 @@ unparseable lines, orphaned events, and duplicate ids.
 
 ### R9. `verify` throughput is the wall under the core economic claim
 
-**Severity: medium. Status: open. Measured.** `src/verify.ts:41`, `src/runner.ts:19`
+**Severity: medium. Status: FIXED in v0.2. Measured.** `src/verify.ts:41`, `src/runner.ts:19`
 
 200 rows against a **trivial no-op check**, serial, one subprocess per row:
 
@@ -419,7 +461,7 @@ per subject in `config.json`.
 
 ### R10. `bin`/`main` point at a path the build never emits
 
-**Severity: medium. Status: open. Verified.** `package.json`
+**Severity: medium. Status: FIXED in v0.2. Verified.** `package.json`
 
 `bin.ratchet` and `main` are both `dist/index.js`. `tsconfig.json` sets
 `rootDir: "."`, so `tsc` emits `dist/src/index.js`. `npm link` installs a
@@ -463,7 +505,7 @@ half the commands.
 
 ### R13. The accept ceremony cannot show what it is retiring
 
-**Severity: medium. Status: PARTLY FIXED in v0.2. Verified.** `src/verify.ts:56,70`
+**Severity: medium. Status: FIXED in v0.2. Verified.** `src/verify.ts:56,70`
 
 `verify` prints id, subject, and reason — never the input. There is no
 `ratchet list` and no `ratchet show <id>`. The human performing the ceremony that
@@ -479,7 +521,7 @@ full event history for a row (capture → accept → reopen with actors and reas
 
 ### R14. Config-missing and check-crashed both score as `fail`
 
-**Severity: medium. Status: PARTLY FIXED in v0.2. Reproduced.** `src/verify.ts:16,47`
+**Severity: medium. Status: FIXED in v0.2. Reproduced.** `src/verify.ts:16,47`
 
 `resolveCheck` throws for an unconfigured subject; the `catch` converts it to
 `pass: false`. A missing config entry, a crashed check, and a genuine regression
@@ -503,7 +545,7 @@ pass/fail exit code, and surface the count separately in `verify` and `report`.
 
 ### R15. No machine-readable output
 
-**Status: open. Verified.** `src/verify.ts:11`
+**Status: FIXED in v0.2. Verified.** `src/verify.ts:11`
 
 `VerifyOptions.json` is declared and never read; no command emits structured
 output. The PR bot and agent-attach that [RATCHET.md](RATCHET.md) describes both
@@ -528,7 +570,7 @@ row inside the loop. Subsumed by the id-scheme change in R3.
 
 ### R18. `accept`/`reopen` are asymmetric on no-ops
 
-**Status: open.** `src/accept.ts:13,33`
+**Status: FIXED in v0.2.** `src/accept.ts:13,33`
 
 `accept` on an already-archived row throws. `reopen` on an already-active row
 silently succeeds and writes a journal entry, so the journal accumulates
@@ -536,7 +578,7 @@ decisions that changed nothing.
 
 ### R19. The demo and the field-experiment artifacts are not committed
 
-**Status: open. Verified.** `ratchet/.gitignore:3`
+**Status: FIXED in v0.3. Verified.** `ratchet/.gitignore:3`
 
 `ratchet/demo/` is gitignored, so the walkthrough that is the primary evidence for
 the design is not in the repo (28 files committed in total). The four field
@@ -547,7 +589,7 @@ and none of them are reproducible from a clone.
 
 ### R20. `stableStringify` is unsound off the JSON value domain
 
-**Status: open, latent. Verified.** `src/corpus.ts:5`
+**Status: FIXED in v0.3, latent. Verified.** `src/corpus.ts:5`
 
 ```
 undefined -> undefined      (returns undefined, not a string; return type says string)
@@ -563,7 +605,7 @@ enforce.
 
 ### R21. No `engines` field
 
-**Status: open.** `package.json`
+**Status: FIXED in v0.3.** `package.json`
 
 `fs.cpSync` requires Node 16.7+ and `node --test` requires 18+, neither declared.
 
@@ -620,10 +662,10 @@ one-line documentation fix once the corresponding defect is resolved.
 
 | what | value |
 |---|---|
-| source size | 868 lines `src`, 177 lines tests (v0) → 1409 `src`, 477 tests (v0.2) |
-| test suite | 11/11 pass, 5.4 s (v0) → 22/22 pass, 9.5 s (v0.2) |
-| `verify` throughput | ~62 ms/row, serial, trivial check |
-| check timeout | 30 s, hardcoded, no caller overrides |
+| source size | 868 `src` / 177 tests (v0) → 1922 `src` / 732 tests (v0.3) |
+| test suite | 11/11 pass, 5.4 s (v0) → 33/33 pass, 9.6 s (v0.3) |
+| `verify` throughput | 62 ms/row serial (v0) → 20 ms/row at default concurrency (v0.3) |
+| check timeout | 30 s hardcoded (v0) → per-subject `timeoutMs` (v0.3) |
 | minimization budget | up to ~100 spawns/row, no overall cap |
 | committed files in repo | 28 (demo and experiment artifacts excluded) |
 | runtime dependencies | 0 |
@@ -669,24 +711,27 @@ main is behind its own floor; visual rejection is uncatchable by design). The
 6. Item 1 is headed **DONE** but ends "Remaining: capture it as a corpus row and
    run it through the accept ceremony." It is not done.
 
-## Remaining order of work
+## What comes next
 
-Items 1–5 of the original plan shipped as v0.2 (see "Resolved in v0.2").
-What is left, in order:
+All 21 review findings are closed. What remains is not on this list — it is in
+[NEXT_STEPS.md](NEXT_STEPS.md) and [RATCHET.md](RATCHET.md):
 
-1. **R8** — `ratchet fsck` and per-line parse recovery. The corpus is the
-   system's memory; it should not be possible to brick it with one bad line.
-2. **R14** — the `na` outcome, distinguishing "check does not apply here" from
-   "check failed". Needed before replay across history means anything.
-3. **R15, R13** — `--json` output and `ratchet show <id>`. These are what a PR
-   bot and the accept ceremony respectively need.
-4. **R10, R21** — packaging: the `bin` path and `engines`. Trivial, and they
-   are what stands between this and `npm link`.
-5. **R9** — batching and parallel verify, once the corpus is trustworthy enough
-   to be worth growing.
-6. **R19** — commit the demo and the field-experiment check scripts, so the
-   evidence is reproducible from a clone.
-7. **R18, R20** — the two cosmetic ones.
+1. **`na(env)` vs `na(code)`.** v0.3 has one `na`. Distinguishing "does not
+   apply here" from "cannot run in this environment" needs per-run environment
+   recording, which is unbuilt.
+2. **Owning-rule hashes.** Until a row records which version of its check
+   produced it, "readings are comparable by construction" is not true — see
+   "Claim vs. implementation" item 3. This is the largest remaining gap between
+   the design documents and the prototype.
+3. **The second confirmation run.** [RATCHET.md](RATCHET.md) promises a failure
+   must reproduce *twice*; one confirmation runs, so a flaky check is still
+   stored half the time.
+4. **`ratchet replay`** with the sampling policy, and the subject-validation
+   protocol as an actual command.
+5. **Self-hosting.** Run the ratchet under itself. A subject asserting "the
+   corpus folds to the same row count after a simulated merge" would have
+   caught R3; "every stored row still reproduces its recorded reason" would
+   have caught R5.
 
 Self-hosting ([NEXT_STEPS.md](NEXT_STEPS.md) experiment 4) should move up. A
 ratchet subject asserting "the corpus folds to the same row count after a

@@ -47,10 +47,10 @@ process.exit(0);
   return { home, root };
 }
 
-function withHome<T>(home: string, fn: () => T): T {
+async function withHome<T>(home: string, fn: () => T | Promise<T>): Promise<T> {
   process.env.RATCHET_HOME = home;
   try {
-    return fn();
+    return await fn();
   } finally {
     delete process.env.RATCHET_HOME;
   }
@@ -111,7 +111,7 @@ test("failureSignature normalizes values but separates causes", () => {
 
 // -------------------------------------------------- R1: no shell injection
 
-test("R1: a crafted test name cannot become shell syntax", () => {
+test("R1: a crafted test name cannot become shell syntax", async () => {
   const { home, root } = project(
     { suite: { check: `"${NODE}" record.js {test}` } },
     "process.exit(0);"
@@ -133,7 +133,7 @@ test("R1: a crafted test name cannot become shell syntax", () => {
     source: "junit",
   });
 
-  const results = withHome(home, () => verify(root, { quiet: true, ratchetHome: home }));
+  const results = await withHome(home, () => verify(root, { quiet: true, ratchetHome: home }));
   assert.equal(results.length, 1);
   assert.equal(results[0].pass, false);
   assert.ok(!fs.existsSync(path.join(root, "owned.txt")), "no injected command may run");
@@ -153,7 +153,7 @@ test("R1: tokenize groups quotes and leaves backslashes alone", () => {
 
 // -------------------------------------- R2: a retired row that comes back
 
-test("R2: an accepted counterexample that recurs is reported, not swallowed", () => {
+test("R2: an accepted counterexample that recurs is reported, not swallowed", async () => {
   const { home, root } = project(
     { s: { check: `"${NODE}" check.js`, captureProperty: "p" } },
     `if (v === 42) fail("boom on 42");`
@@ -161,7 +161,7 @@ test("R2: an accepted counterexample that recurs is reported, not swallowed", ()
   const capFile = path.join(root, "cap.json");
   fs.writeFileSync(capFile, JSON.stringify([{ property: "p", counterexample: [42] }]), "utf8");
 
-  withHome(home, () => {
+  await withHome(home, async () => {
     const first = capture(root, [capFile]);
     assert.equal(first.added.length, 1);
     const id = rows(home)[0].id;
@@ -182,7 +182,7 @@ test("R2: an accepted counterexample that recurs is reported, not swallowed", ()
     const reopened = capture(root, [capFile], { reopen: true, actor: "ci" });
     assert.equal(reopened.recurred[0].reopened, true);
     assert.equal(rows(home)[0].status, "active");
-    assert.equal(verify(root, { quiet: true, ratchetHome: home })[0].pass, false);
+    assert.equal((await verify(root, { quiet: true, ratchetHome: home }))[0].pass, false);
   });
 });
 
@@ -233,7 +233,7 @@ test("R4: unparseable timestamps fall back to file order", () => {
 
 // ------------------------------------ R5: reduction must preserve the cause
 
-test("R5: minimization does not slip onto an unrelated bug", () => {
+test("R5: minimization does not slip onto an unrelated bug", async () => {
   // Two independent defects: an unrelated legacy one at 0, and the
   // regression actually being captured at n >= 1000.
   const { home, root } = project(
@@ -244,7 +244,7 @@ test("R5: minimization does not slip onto an unrelated bug", () => {
   const capFile = path.join(root, "cap.json");
   fs.writeFileSync(capFile, JSON.stringify([{ property: "p", counterexample: [8347] }]), "utf8");
 
-  withHome(home, () => {
+  await withHome(home, async () => {
     const rep = capture(root, [capFile]);
     assert.equal(rep.added.length, 1);
     const row = rows(home)[0];
@@ -254,7 +254,7 @@ test("R5: minimization does not slip onto an unrelated bug", () => {
   });
 });
 
-test("R5: a row failing for a new reason is flagged as drift", () => {
+test("R5: a row failing for a new reason is flagged as drift", async () => {
   const { home, root } = project(
     { s: { check: `"${NODE}" check.js`, captureProperty: "p" } },
     `if (v === 5) fail("original cause");`
@@ -262,9 +262,9 @@ test("R5: a row failing for a new reason is flagged as drift", () => {
   const capFile = path.join(root, "cap.json");
   fs.writeFileSync(capFile, JSON.stringify([{ property: "p", counterexample: [5] }]), "utf8");
 
-  withHome(home, () => {
+  await withHome(home, async () => {
     capture(root, [capFile]);
-    assert.equal(verify(root, { quiet: true, ratchetHome: home })[0].signatureDrift, false);
+    assert.equal((await verify(root, { quiet: true, ratchetHome: home }))[0].signatureDrift, false);
 
     // same input still fails, but for something else entirely
     fs.writeFileSync(
@@ -274,7 +274,7 @@ test("R5: a row failing for a new reason is flagged as drift", () => {
        process.exit(0);`,
       "utf8"
     );
-    const res = verify(root, { quiet: true, ratchetHome: home })[0];
+    const res = (await verify(root, { quiet: true, ratchetHome: home }))[0];
     assert.equal(res.pass, false);
     assert.equal(res.signatureDrift, true);
   });
@@ -338,12 +338,12 @@ function headState(dir: string): { branch: string; head: string } {
   };
 }
 
-test("R6: bisect finds the introducing commit without moving the checkout", () => {
+test("R6: bisect finds the introducing commit without moving the checkout", async () => {
   const { dir, good } = seedRepo();
   const before = headState(dir);
   const id = rowId("s", 5);
 
-  const result = bisect(dir, id, good, "HEAD", { ratchetHome: path.join(dir, ".ratchet") });
+  const result = await bisect(dir, id, good, "HEAD", { ratchetHome: path.join(dir, ".ratchet") });
   const subject = spawnSync("git", ["log", "-1", "--format=%s", result.firstBad], { cwd: dir, encoding: "utf8" }).stdout.trim();
   assert.equal(subject, "c5-breaks");
 
@@ -352,18 +352,18 @@ test("R6: bisect finds the introducing commit without moving the checkout", () =
   assert.notEqual(after.branch, "", "and must not be detached");
 });
 
-test("R6: a failed bisect still leaves the checkout untouched", () => {
+test("R6: a failed bisect still leaves the checkout untouched", async () => {
   const { dir, good } = seedRepo();
   const before = headState(dir);
 
-  assert.throws(
+  await assert.rejects(
     () => bisect(dir, "does-not-exist", good, "HEAD", { ratchetHome: path.join(dir, ".ratchet") }),
     /not found/
   );
   assert.deepEqual(headState(dir), before, "an error must not strand the repository");
 });
 
-test("R6: bisect refuses two refs that are not a range", () => {
+test("R6: bisect refuses two refs that are not a range", async () => {
   const { dir } = seedRepo();
   const g = (...a: string[]) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
   g("checkout", "-q", "-b", "side", "HEAD~3");
@@ -373,7 +373,7 @@ test("R6: bisect refuses two refs that are not a range", () => {
   const side = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).stdout.trim();
   g("checkout", "-q", "-");
 
-  assert.throws(
+  await assert.rejects(
     () => bisect(dir, rowId("s", 5), side, "HEAD", { ratchetHome: path.join(dir, ".ratchet") }),
     /not an ancestor/
   );
@@ -381,7 +381,7 @@ test("R6: bisect refuses two refs that are not a range", () => {
 
 // ------------------------------------------ R7: the JUnit path is gated too
 
-test("R7: junit rows are deduped instead of multiplying", () => {
+test("R7: junit rows are deduped instead of multiplying", async () => {
   const { home, root } = project(
     { "login works": { check: `"${NODE}" check.js` } },
     `fail("still broken");`
@@ -393,7 +393,7 @@ test("R7: junit rows are deduped instead of multiplying", () => {
     "utf8"
   );
 
-  withHome(home, () => {
+  await withHome(home, async () => {
     assert.equal(capture(root, [junit]).added.length, 1);
     assert.equal(capture(root, [junit]).added.length, 0, "a second capture must not add a duplicate");
     assert.equal(capture(root, [junit]).added.length, 0);
@@ -403,12 +403,12 @@ test("R7: junit rows are deduped instead of multiplying", () => {
   });
 });
 
-test("R7: junit rows run discrimination — a passing test is not stored", () => {
+test("R7: junit rows run discrimination — a passing test is not stored", async () => {
   const { home, root } = project({ "flaky test": { check: `"${NODE}" check.js` } }, "process.exit(0);");
   const junit = path.join(root, "junit.xml");
   fs.writeFileSync(junit, `<testsuite><testcase name="flaky test"><failure message="was red"/></testcase></testsuite>`, "utf8");
 
-  withHome(home, () => {
+  await withHome(home, async () => {
     const rep = capture(root, [junit]);
     assert.equal(rep.added.length, 0, "a failure that no longer reproduces is not evidence");
     assert.equal(rep.skipped.length, 1);
@@ -416,23 +416,23 @@ test("R7: junit rows run discrimination — a passing test is not stored", () =>
   });
 });
 
-test("R7: a subject with no check is not stored and does not redden the build", () => {
+test("R7: a subject with no check is not stored and does not redden the build", async () => {
   const { home, root } = project({ configured: { check: `"${NODE}" check.js` } }, "process.exit(0);");
   const junit = path.join(root, "junit.xml");
   fs.writeFileSync(junit, `<testsuite><testcase name="never configured"><failure message="x"/></testcase></testsuite>`, "utf8");
 
-  withHome(home, () => {
+  await withHome(home, async () => {
     const rep = capture(root, [junit]);
     assert.equal(rep.added.length, 0);
     assert.deepEqual(rep.unconfigured, ["never configured"]);
     assert.equal(rows(home).length, 0, "an unverifiable row must never enter the corpus");
-    assert.equal(verify(root, { quiet: true, ratchetHome: home }).length, 0);
+    assert.equal((await verify(root, { quiet: true, ratchetHome: home })).length, 0);
   });
 });
 
 // --------------------------------------------------------- end-to-end loop
 
-test("capture, dedup, verify, accept, reopen, report", () => {
+test("capture, dedup, verify, accept, reopen, report", async () => {
   const { home, root } = project(
     { lt1000: { check: `"${NODE}" check.js`, captureProperty: "lt1000.prop" } },
     `if (typeof v === "number" && v >= 1000) fail("value " + v + " is not under 1000");`
@@ -448,18 +448,18 @@ test("capture, dedup, verify, accept, reopen, report", () => {
     "utf8"
   );
 
-  withHome(home, () => {
+  await withHome(home, async () => {
     const rep = capture(root, [capFile]);
     assert.equal(rep.added.length, 1, JSON.stringify(rep));
     assert.equal(rep.skipped.length, 2);
 
-    const results = verify(root, { quiet: true, ratchetHome: home });
+    const results = await verify(root, { quiet: true, ratchetHome: home });
     assert.equal(results.length, 1);
     assert.equal(results[0].pass, false);
 
     const id = rows(home)[0].id;
     accept(root, id, "1000 is the new ceiling", "alice");
-    assert.equal(verify(root, { quiet: true, ratchetHome: home }).length, 0, "archived rows stop enforcing");
+    assert.equal((await verify(root, { quiet: true, ratchetHome: home })).length, 0, "archived rows stop enforcing");
 
     const j = readJournal(path.join(home, "journal.jsonl"));
     assert.equal(j.length, 1);

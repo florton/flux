@@ -32,7 +32,7 @@ function git(cwd: string, args: string[]): { status: number; stdout: string; std
  * checkout, the worktree is removed in a `finally`, and a dirty working tree
  * is no longer a reason to refuse.
  */
-export function bisect(cwd: string, id: string, good: string, bad: string, opts: BisectOptions = {}): BisectResult {
+export async function bisect(cwd: string, id: string, good: string, bad: string, opts: BisectOptions = {}): Promise<BisectResult> {
   const notes: string[] = [];
 
   const goodSha = git(cwd, ["rev-parse", good]);
@@ -83,7 +83,7 @@ export function bisect(cwd: string, id: string, good: string, bad: string, opts:
     if (add.status !== 0) throw new Error(`could not create worktree: ${add.stderr}`);
     worktreeAdded = true;
 
-    const runTest = (sha: string): boolean => {
+    const runTest = async (sha: string): Promise<boolean> => {
       probes++;
       const co = git(worktree, ["checkout", "--detach", "--force", sha]);
       if (co.status !== 0) throw new Error(`checkout ${sha} failed: ${co.stderr}`);
@@ -91,16 +91,16 @@ export function bisect(cwd: string, id: string, good: string, bad: string, opts:
         const s = runCheck(opts.setup, null, { cwd: worktree, shell: true, timeoutMs: 600_000 });
         if (!s.pass) throw new Error(`setup failed at ${sha.slice(0, 8)}: ${s.reason}`);
       }
-      const results = verify(worktree, { row: id, quiet: true, ratchetHome: tempHome });
+      const results = await verify(worktree, { row: id, quiet: true, ratchetHome: tempHome });
       const row = results.find((r) => r.id === id || r.id.startsWith(id));
       if (!row) throw new Error(`row ${id} not found while verifying ${sha}`);
       return row.pass;
     };
 
-    if (runTest(badSha.stdout)) {
+    if (await runTest(badSha.stdout)) {
       throw new Error(`row ${id} passes at ${bad} — --bad must be a failing commit`);
     }
-    if (!runTest(goodSha.stdout)) {
+    if (!(await runTest(goodSha.stdout))) {
       throw new Error(`row ${id} fails at ${good} — --good must be a passing commit`);
     }
 
@@ -108,7 +108,7 @@ export function bisect(cwd: string, id: string, good: string, bad: string, opts:
     let hi = commits.length - 1;
     while (lo < hi) {
       const mid = Math.floor((lo + hi) / 2);
-      if (runTest(commits[mid])) lo = mid + 1;
+      if (await runTest(commits[mid])) lo = mid + 1;
       else hi = mid;
     }
     return { firstBad: commits[lo], probes, notes };

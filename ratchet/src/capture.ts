@@ -158,13 +158,17 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
       continue;
     }
 
-    const runOpts = { cwd, shell: subj.shell, testName: b.test };
+    const runOpts = { cwd, shell: subj.shell, timeoutMs: subj.timeoutMs, testName: b.test };
 
     // Discrimination, for every source: the counterexample must reproduce
     // against the current code before it is worth remembering.
     const confirm = runCheck(subj.check, b.input, runOpts);
     if (confirm.errored) {
       report.skipped.push(`${b.subject} (check could not run: ${confirm.reason})`);
+      continue;
+    }
+    if (confirm.outcome === "na") {
+      report.skipped.push(`${b.subject} (check reports n/a here: ${confirm.reason})`);
       continue;
     }
     if (confirm.pass) {
@@ -189,7 +193,7 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
           b.input,
           (candidate) => {
             const r = runCheck(subj.check, candidate, runOpts);
-            return !r.pass && !r.errored && signaturesMatch(failureSignature(r.reason, r.code), signature);
+            return r.outcome === "fail" && !r.errored && signaturesMatch(failureSignature(r.reason, r.code), signature);
           },
           budget
         );
@@ -201,7 +205,7 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
       // original counterexample rather than storing something unproven.
       if (stableStringify(input) !== stableStringify(b.input)) {
         const recheck = runCheck(subj.check, input, runOpts);
-        if (recheck.pass || recheck.errored || !signaturesMatch(failureSignature(recheck.reason, recheck.code), signature)) {
+        if (recheck.outcome !== "fail" || recheck.errored || !signaturesMatch(failureSignature(recheck.reason, recheck.code), signature)) {
           report.skipped.push(`${b.subject} (reduction did not hold on recheck — kept the original input)`);
           input = b.input;
         } else {

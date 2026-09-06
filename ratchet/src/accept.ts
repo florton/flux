@@ -42,6 +42,7 @@ export function reopen(cwd: string, id: string, reason: string, actor: string): 
   const { corpusPath, journalPath } = corpusFile(cwd);
   const row = findRow(corpusPath, id);
   if (!row) throw new Error(`no row ${id} in corpus`);
+  if (row.status === "active") throw new Error(`row ${row.id} is already active`);
 
   const at = new Date().toISOString();
   appendEvent(corpusPath, {

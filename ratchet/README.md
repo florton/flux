@@ -1,16 +1,14 @@
-# Ratchet — v0.2 prototype
+# Ratchet — v0.3 prototype
 
 Regression memory for AI-assisted development. The design sketch is
 [../RATCHET.md](../RATCHET.md); this folder is the first working slice.
 
-> **Status.** v0.2 closes the seven correctness and security defects found in
-> the v0 review (R1–R7 in [../ISSUES_RATCHET.md](../ISSUES_RATCHET.md)):
-> checks no longer run through a shell with an interpolated test name, a
-> retired counterexample that comes back is reported instead of swallowed,
-> reduction preserves the failure cause, row ids survive branch merges, and
-> `bisect` runs in a worktree. Fourteen lower-severity issues remain open —
-> notably no `--json` output, no `ratchet fsck`, and serial `verify` at
-> ~62 ms/row.
+> **Status.** All 21 issues from the v0 review
+> ([../ISSUES_RATCHET.md](../ISSUES_RATCHET.md)) are closed. v0.2 fixed the
+> seven correctness and security defects; v0.3 adds the third check outcome
+> (`na`), `fsck`, `list`, `show`, `--json`, parallel `verify` (3.1× faster),
+> the packaging fix, and a generated demo that is reproducible from a clone.
+> 33 tests, including a regression test per defect.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; everything is a file git already knows how to commit.
@@ -22,8 +20,8 @@ journal is plain JSONL; everything is a file git already knows how to commit.
 3. In the target repo: `ratchet init`, then edit `.ratchet/config.json` — for
    each subject, a `check` command that reads one input as JSON on stdin and
    exits 0 (pass) or nonzero (fail).
-4. Wire the fast-check reporter from `demo/property.js` into your property
-   tests, or point `ratchet capture` at CI's JUnit XML.
+4. Wire a fast-check reporter into your property tests (`demo/setup.js`
+   generates a working one), or point `ratchet capture` at CI's JUnit XML.
 
 The CLI finds `.ratchet/` by walking up from the working directory, so run it
 from anywhere inside the repo. `--home <dir>` overrides that for every
@@ -46,16 +44,19 @@ $ ratchet verify --home "$MEM/.ratchet"   # today's corpus, old code
 ratchet init                      create .ratchet/ with a config template
 ratchet capture <file...>         add counterexamples (fast-check capture JSON or junit.xml)
                                   [--reopen] put retired rows back when they recur
-ratchet verify [--row id] [--subject name] [--quiet]
+ratchet verify [--row id] [--subject name] [--quiet] [--jobs N]
+ratchet list [--status active|archived] [--subject name]
+ratchet show <id>                 a row's input, witness, history and journal
 ratchet accept <id> --reason "..." [--actor name]
 ratchet reopen <id> --reason "..." [--actor name]
 ratchet note --text "..." [--actor name]
 ratchet report                    corpus stats and churn summary
+ratchet fsck                      corpus and journal integrity check
 ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
 ```
 
-Every command accepts `--home <dir>`. Row ids are content-addressed; any
-unambiguous prefix works where an id is expected.
+Every command accepts `--home <dir>` and `--json`. Row ids are
+content-addressed; any unambiguous prefix works where an id is expected.
 
 ## Config
 
@@ -81,6 +82,7 @@ unambiguous prefix works where an id is expected.
   bearing** — see "The witness" below.
 - `captureProperty` — binds a fast-check property name to this subject.
 - `shell` — run `check` through a shell. Off by default.
+- `timeoutMs` — per-subject timeout. Default 30000.
 
 ### How checks are executed
 
@@ -97,7 +99,7 @@ a Makefile target — but the test name is still never interpolated into it, so
 ## Capture sources
 
 - **fast-check** — a custom reporter writes `ratchet-capture.json` on failure
-  (see `demo/property.js`); `ratchet capture` reads it.
+  (`demo/setup.js` generates a working one); `ratchet capture` reads it.
 - **JUnit XML** — `<failure>` test cases become rows keyed by test name.
 - Anything else: hand-write the capture JSON shape and capture it.
 
@@ -129,6 +131,36 @@ one it was created to watch:
 
 A check that prints nothing on failure degrades to `exit:<code>`, which is a
 much weaker guarantee. Printing why you failed is what buys the strong one.
+
+## The three outcomes
+
+A check exits 0 to pass and nonzero to fail. It may also exit **125** to say
+*not applicable at this commit* — the third outcome, borrowed from
+`git bisect skip`:
+
+```
+✓ c87cb67944d6f s
+✗ cfd1f483d53bf s 13 — unlucky
+− c74cef33855a7 s 7 — n/a: feature absent at this commit
+
+2/4 rows pass, 1 failing, 1 n/a
+```
+
+`na` is neither a pass nor a failure and does not fail the build, which is
+what replay across history needs: a check that cannot apply to a 2019 commit
+should not be scored as a bug there. A check that cannot be *spawned* stays a
+failure — that is indistinguishable from a broken config, and silently
+greening it would be the false pass this tool exists to prevent.
+
+## Integrity
+
+`ratchet fsck` reports unreadable lines, orphaned accept/reopen events,
+subjects with no configured check, and rows whose id does not match their own
+content. That last one is only possible because ids are content-addressed: a
+hand-edited or corrupted row is mechanically detectable.
+
+`verify` refuses to run at all against a corpus with unreadable lines — a row
+hidden behind a parse error is a false pass — and names the line.
 
 ## The accept ceremony
 
@@ -177,18 +209,10 @@ npm run build
 npm test
 ```
 
-22 tests, including one regression test per defect closed in v0.2.
+33 tests, including one regression test per defect closed from the v0 review.
+The demo is generated by `node demo/setup.js`; see [demo/README.md](demo/README.md).
 
 ## What this prototype still leaves out
-
-Tracked as R8–R21 in [../ISSUES_RATCHET.md](../ISSUES_RATCHET.md). The ones
-that bite first:
-
-- no `--json` output, so there is no CI annotation or PR-bot surface
-- no `ratchet fsck`; a malformed corpus line is still a hard stop
-- `verify` is serial at ~62 ms/row and the corpus only grows
-- `bin`/`main` in `package.json` point at a path the build does not emit
-- no `ratchet show <id>` for inspecting a row's full history
 
 From the design in [../RATCHET.md](../RATCHET.md), still absent: owning-rule
 hashes and quarantine, behavior snapshots and sampled behavioral diffs, the

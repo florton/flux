@@ -9,6 +9,8 @@ export interface SubjectConfig {
    * and the test name still reaches the check only via RATCHET_TEST.
    */
   shell?: boolean;
+  /** Per-subject timeout in milliseconds. Default 30_000. */
+  timeoutMs?: number;
 }
 
 export interface RatchetConfig {
@@ -56,6 +58,12 @@ export interface CorpusFold {
   orphans: CorpusEvent[];
 }
 
+export interface LineProblem {
+  line: number;
+  text: string;
+  error: string;
+}
+
 export interface JournalEvent {
   at: string;
   kind: "decision" | "accept" | "note";
@@ -65,9 +73,23 @@ export interface JournalEvent {
   commit?: string;
 }
 
+/**
+ * `na` is the third outcome: the check ran and reported that it does not
+ * apply at this commit (exit code 125, borrowed from `git bisect skip`).
+ * It is neither a pass nor a failure, and it does not fail the build. A
+ * check that cannot be spawned at all stays a failure — that is
+ * indistinguishable from a broken config, and silently greening it would
+ * be the exact false pass this tool exists to prevent.
+ */
+export type CheckOutcome = "pass" | "fail" | "na";
+
+export const NA_EXIT_CODE = 125;
+
 export interface VerifyResult {
   id: string;
   subject: string;
+  outcome: CheckOutcome;
+  /** True only for outcome "pass". Kept so callers read as before. */
   pass: boolean;
   reason?: string;
   /**
