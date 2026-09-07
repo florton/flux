@@ -46,6 +46,40 @@ export interface Session {
   checkout(sha: string): void;
 }
 
+function makeSession(worktree: string, tempHome: string): Session {
+  return {
+    path: worktree,
+    home: tempHome,
+    checkout(sha: string): void {
+      const co = git(worktree, ["checkout", "--detach", "--force", sha]);
+      if (co.status !== 0) throw new Error(`checkout ${sha} failed: ${co.stderr}`);
+    },
+  };
+}
+
+interface CreatedWorktree {
+  worktree: string;
+  tmp: string;
+}
+
+function createWorktree(cwd: string, home: string, startSha: string): CreatedWorktree {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-wt-"));
+  const worktree = path.join(tmp, "wt");
+  const tempHome = path.join(tmp, ".ratchet");
+  fs.cpSync(home, tempHome, { recursive: true });
+  const add = git(cwd, ["worktree", "add", "--detach", worktree, startSha]);
+  if (add.status !== 0) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    throw new Error(`could not create worktree: ${add.stderr}`);
+  }
+  return { worktree, tmp };
+}
+
+function removeWorktrees(cwd: string, created: CreatedWorktree[]): void {
+  for (const c of created) git(cwd, ["worktree", "remove", "--force", c.worktree]);
+  for (const c of created) fs.rmSync(c.tmp, { recursive: true, force: true });
+}
+
 /**
  * Run `fn` against a detached worktree, and tear it down whatever happens.
  *
@@ -63,29 +97,35 @@ export async function withWorktree<T>(
   startSha: string,
   fn: (session: Session) => Promise<T>
 ): Promise<T> {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-wt-"));
-  const worktree = path.join(tmp, "wt");
-  const tempHome = path.join(tmp, ".ratchet");
-  let added = false;
+  return withWorktrees(cwd, home, startSha, 1, async (sessions) => fn(sessions[0]));
+}
 
+/**
+ * Like `withWorktree`, but with `count` parallel sessions.
+ *
+ * A `git worktree` holds one checked-out commit at a time, so probing N
+ * commits concurrently needs N worktrees. Each session has its own copy of
+ * the ratchet home (checks must never observe a half-written shared one), and
+ * every session is torn down in the `finally` whatever happens.
+ */
+export async function withWorktrees<T>(
+  cwd: string,
+  home: string,
+  startSha: string,
+  count: number,
+  fn: (sessions: Session[]) => Promise<T>
+): Promise<T> {
+  const created: CreatedWorktree[] = [];
   try {
-    fs.cpSync(home, tempHome, { recursive: true });
-    const add = git(cwd, ["worktree", "add", "--detach", worktree, startSha]);
-    if (add.status !== 0) throw new Error(`could not create worktree: ${add.stderr}`);
-    added = true;
-
-    const session: Session = {
-      path: worktree,
-      home: tempHome,
-      checkout(sha: string): void {
-        const co = git(worktree, ["checkout", "--detach", "--force", sha]);
-        if (co.status !== 0) throw new Error(`checkout ${sha} failed: ${co.stderr}`);
-      },
-    };
-    return await fn(session);
+    const sessions: Session[] = [];
+    for (let i = 0; i < count; i++) {
+      const c = createWorktree(cwd, home, startSha);
+      created.push(c);
+      sessions.push(makeSession(c.worktree, path.join(c.tmp, ".ratchet")));
+    }
+    return await fn(sessions);
   } finally {
-    if (added) git(cwd, ["worktree", "remove", "--force", worktree]);
-    fs.rmSync(tmp, { recursive: true, force: true });
+    removeWorktrees(cwd, created);
   }
 }
 

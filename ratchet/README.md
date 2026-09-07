@@ -1,4 +1,4 @@
-# Ratchet — v0.5 prototype
+# Ratchet — v0.6 prototype
 
 Regression memory for AI-assisted development. The design sketch is
 [../RATCHET.md](../RATCHET.md); this folder is the first working slice.
@@ -9,9 +9,13 @@ Regression memory for AI-assisted development. The design sketch is
 > the second confirmation run, `ratchet replay` with sampling and halving,
 > `ratchet validate`, and self-hosting. The ratchet now runs under itself —
 > its own invariants are validated against the commits where its own bugs
-> lived. v0.5 adds the first *behavior snapshot*: visual pins — screenshots
+> lived. v0.5 added the first *behavior snapshot*: visual pins — screenshots
 > become corpus rows, with a zero-dependency PNG diff as the check's witness.
-> 62 tests.
+> v0.6 works the adoption gaps: the ratchet's **own corpus is populated** (the
+> five v0 defects captured at the commit where they lived and re-pinned to
+> today's instrument), capture gains a **TAP source** and a hardier JUnit
+> parser, and `replay` probes history on **parallel worktrees** (`--jobs`).
+> 69 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; everything is a file git already knows how to commit.
@@ -56,6 +60,8 @@ ratchet note --text "..." [--actor name]
 ratchet report                    corpus stats and churn summary
 ratchet fsck                      corpus and journal integrity check
 ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
+ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
+               [--setup "npm ci"] [--no-pinpoint]
 ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
 ratchet visual record <subject> --route <url> [--file <png>] [--viewport WxH]
                        [--tolerance N] [--max-percent P] [--wait-ms ms]
@@ -169,8 +175,21 @@ purpose.
 
 - **fast-check** — a custom reporter writes `ratchet-capture.json` on failure
   (`demo/setup.js` generates a working one); `ratchet capture` reads it.
-- **JUnit XML** — `<failure>` test cases become rows keyed by test name.
+- **JUnit XML** — `<failure>` and `<error>` test cases become rows keyed by
+  test name. CDATA bodies, message-less failures, entity references, and
+  single- or double-quoted attributes all parse; `classname` no longer
+  shadows `name`.
+- **TAP** — `ratchet capture results.tap` reads TAP v12/v13 (what
+  `node --test --test-reporter=tap` and most Perl-family runners emit).
+  The failure's diagnostics (`error:`/`message:` keys) become the row's
+  displayed reason; `# SKIP`/`# TODO` directives are not failures.
 - Anything else: hand-write the capture JSON shape and capture it.
+
+The witness that *enforces* a row always comes from the check's own output —
+that is what `verify` compares against. When a check prints nothing (its
+reason degrades to `exit <n>`), the parsed JUnit/TAP text still fills the
+row's displayed reason, while the signature stays check-derived so drift
+detection stays honest.
 
 Every capture, from every source, goes through the same gate:
 
@@ -288,6 +307,10 @@ transition between 4abc1d54 and 9f53b4d2, halved in 3 probes:
 
 - `--every N` samples every Nth commit; `--every day|week` takes the first
   commit in each period; dense is the default.
+- `--jobs N` probes up to N commits concurrently, each on its own worktree
+  (one checkout per worktree, so probes on a session are serialized while
+  sessions run in parallel). The report comes back in commit order either
+  way.
 - `--subjects` replays the configured subjects rather than the corpus rows.
   A corpus row is a counterexample that must not fail again; a subject is a
   standing invariant, which has no counterexample while it holds. Both are
@@ -381,6 +404,17 @@ $ ratchet replay --good 4abc1d5^ --subjects --setup "node .ratchet/tools/build.j
 
 The one still failing at v0.2 is `stringify-injective`, which is R20 — fixed in
 v0.3. The replay reconstructs the fix history without being told it.
+
+**And the corpus is not empty anymore.** Those five defects are captured as
+rows: checked out `4abc1d5` in a worktree, ran `ratchet capture` against the
+carried home (discrimination reproduced each failure twice at the commit
+where it lived), then `reaffirm`ed the rows to today's instrument — so
+`ratchet verify` runs five rows against this repository on every commit, and
+a re-introduced R2/R3/R4/R5/R20 is a hard block. `ratchet report` shows the
+memory: five rows, all active, all passing at HEAD. Capturing the same
+counterexamples at `0d710eb` produced four "not reproducible — check passes
+now" skips and one "already in corpus" — the same gate that built the corpus
+verifies its own fix history.
 
 Two of these five subjects failed their own validation on the first attempt:
 they tested `minimize` and `foldRows` in isolation, while the defects lived in

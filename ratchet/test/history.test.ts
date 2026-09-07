@@ -39,7 +39,7 @@ async function withHome<T>(home: string, fn: () => T | Promise<T>): Promise<T> {
  * A repository whose history contains one real bug: `double(n)` returns
  * `n + 2` instead of `n * 2` for a stretch of commits, then is fixed.
  */
-function seedHistory(commits = 9, breakAt = 3, fixAt = 7): { dir: string; base: string; log: CommitInfo[] } {
+function seedHistory(commits = 9, breakAt = 3, fixAt = 7, delayMs?: number): { dir: string; base: string; log: CommitInfo[] } {
   const dir = tmpDir();
   const g = (...args: string[]) =>
     spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args],
@@ -52,11 +52,14 @@ function seedHistory(commits = 9, breakAt = 3, fixAt = 7): { dir: string; base: 
     [
       'const v = JSON.parse(require("fs").readFileSync(0, "utf8"));',
       'const { double } = require("./lib.js");',
+      delayMs ? `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${delayMs});` : "",
       "const got = double(v);",
       "if (got === v * 2) process.exit(0);",
       'console.log("double(" + v + ") gave " + got + ", expected " + v * 2);',
       "process.exit(1);",
-    ].join("\n"),
+    ]
+      .filter((l) => l !== "")
+      .join("\n"),
     "utf8"
   );
   fs.writeFileSync(
@@ -331,6 +334,47 @@ test("replay reports a commit it cannot prepare as na-env, not as a bug", async 
   assert.ok(r.samples.length > 0);
   assert.ok(r.samples.every((s) => s.status === "na-env"), "dependency rot is not a regression");
   assert.equal(r.samples.every((s) => (s.note ?? "").includes("setup failed")), true);
+});
+
+test("replay --jobs probes commits on parallel worktrees, results in order", async () => {
+  // Each probe sleeps ~400ms, so 8 serial probes take >3s while 4 parallel
+  // workers finish in roughly a quarter of it. The check runs inside the
+  // worktree, so this also proves each session checks out its own commit
+  // without clobbering the others.
+  const { dir, base, log } = seedHistory(8, 99, 99, 400); // never broken, slow checks
+  appendEvent(path.join(dir, ".ratchet", "corpus.jsonl"), {
+    op: "capture",
+    id: rowId("doubling", 21),
+    at: "2026-02-01T00:00:00Z",
+    subject: "doubling",
+    input: 21,
+    source: "manual",
+  });
+  const home = path.join(dir, ".ratchet");
+
+  const serialStart = Date.now();
+  await replay(dir, { good: base, bad: "HEAD", ratchetHome: home, concurrency: 1 });
+  const serialMs = Date.now() - serialStart;
+
+  const parStart = Date.now();
+  const r = await replay(dir, { good: base, bad: "HEAD", ratchetHome: home, concurrency: 4 });
+  const parMs = Date.now() - parStart;
+
+  assert.equal(r.samples.length, log.length);
+  assert.ok(r.samples.every((s) => s.status === "pass"));
+  assert.deepEqual(
+    r.samples.map((s) => s.commit.sha),
+    log.map((c) => c.sha),
+    "parallel probing must preserve commit order in the report"
+  );
+  assert.ok(serialMs > 2400, `serial run should take ~8 x 400ms, took ${serialMs}ms`);
+  assert.ok(parMs < serialMs * 0.6, `parallel ${parMs}ms is not much faster than serial ${serialMs}ms`);
+
+  // No worktrees are left behind, same as the serial path.
+  assert.equal(
+    spawnSync("git", ["worktree", "list"], { cwd: dir, encoding: "utf8" }).stdout.trim().split("\n").length,
+    1
+  );
 });
 
 // ---------------------------------------------------------------- validate

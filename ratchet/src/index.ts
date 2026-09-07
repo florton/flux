@@ -18,7 +18,7 @@ function usage(): string {
   return `ratchet — regression memory for AI-assisted development
 
   ratchet init                     create .ratchet/ with a config template
-  ratchet capture <file...>        add counterexamples (fast-check capture JSON or junit.xml)
+  ratchet capture <file...>        add counterexamples (fast-check capture JSON, junit.xml, or .tap)
                                    [--reopen] put retired rows back when they recur
   ratchet verify [--row id] [--subject name] [--quiet] [--jobs N]
   ratchet list [--status active|archived] [--subject name]
@@ -30,7 +30,8 @@ function usage(): string {
   ratchet report                   corpus stats and churn summary
   ratchet fsck                     corpus and journal integrity check
   ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
-  ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects]
+  ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
+                 [--no-pinpoint]
   ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]
   ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
   ratchet visual record <subject> --route <url-or-route> [--viewport WxH] [--tolerance N]
@@ -333,6 +334,7 @@ async function main(): Promise<void> {
         ratchetHome: homeDir(cwd),
         noPinpoint: bools.has("--no-pinpoint"),
         subjects: bools.has("--subjects"),
+        concurrency: flags.get("--jobs") ? Math.max(1, parseInt(flags.get("--jobs")!, 10)) : undefined,
       });
       emit(json, result, formatReplay(result));
       if (result.samples.some((x) => x.status === "fail")) process.exit(1);

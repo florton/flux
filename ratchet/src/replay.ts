@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { verify, countOutcomes } from "./verify";
-import { runCheckAsync } from "./runner";
-import { commitRange, environment, withWorktree, type CommitInfo, type Environment, type Session } from "./worktree";
+import { runCheckAsync, pool } from "./runner";
+import { commitRange, environment, withWorktrees, type CommitInfo, type Environment, type Session } from "./worktree";
 import type { RatchetConfig, VerifyResult } from "./types";
 
 export type SamplePolicy = { kind: "dense" } | { kind: "stride"; n: number } | { kind: "period"; unit: "day" | "week" };
@@ -141,9 +141,10 @@ export async function replay(cwd: string, opts: ReplayOptions): Promise<ReplayRe
   const { commits, firstParent } = commitRange(cwd, opts.good, opts.bad);
   const picked = sample(commits, policy);
   const home = opts.ratchetHome ?? process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
+  const sessions = Math.max(1, Math.min(opts.concurrency ?? 1, picked.length));
 
-  return withWorktree(cwd, home, commits[commits.length - 1].sha, async (session) => {
-    const probe = async (commit: CommitInfo): Promise<ReplaySample> => {
+  return withWorktrees(cwd, home, commits[commits.length - 1].sha, sessions, async (poolSessions) => {
+    const probe = async (session: Session, commit: CommitInfo): Promise<ReplaySample> => {
       session.checkout(commit.sha);
 
       // A setup failure at an old commit is an environment candidate, not a
@@ -179,8 +180,18 @@ export async function replay(cwd: string, opts: ReplayOptions): Promise<ReplayRe
       return { commit, status: statusOf(results), counts: countOutcomes(results), results };
     };
 
-    const samples: ReplaySample[] = [];
-    for (const commit of picked) samples.push(await probe(commit));
+    // One worker per session: a session is a single checkout at a time, so
+    // its commits must be probed sequentially by exactly one worker. Items
+    // are distributed round-robin and results land at their original index.
+    const samples: ReplaySample[] = new Array(picked.length);
+    const perSession: { session: Session; items: { commit: CommitInfo; index: number }[] }[] = Array.from(
+      { length: sessions },
+      (_, i) => ({ session: poolSessions[i], items: [] })
+    );
+    picked.forEach((commit, index) => perSession[index % sessions].items.push({ commit, index }));
+    await pool(perSession, sessions, async (chunk) => {
+      for (const { commit, index } of chunk.items) samples[index] = await probe(chunk.session, commit);
+    });
 
     const report: ReplayReport = {
       environment: environment(),
@@ -193,7 +204,8 @@ export async function replay(cwd: string, opts: ReplayOptions): Promise<ReplayRe
 
     // Coarse to fine: the sampler found the window, halving closes it. Only a
     // pass -> fail transition is pinpointed; na-env samples are skipped over
-    // rather than treated as either side of a boundary.
+    // rather than treated as either side of a boundary. Halving is inherently
+    // sequential and runs on the first session.
     if (opts.noPinpoint) return report;
     const usable = samples.filter((s) => s.status === "pass" || s.status === "fail");
     let lastPass: ReplaySample | undefined;
@@ -219,7 +231,7 @@ export async function replay(cwd: string, opts: ReplayOptions): Promise<ReplayRe
     while (a < b) {
       const mid = Math.floor((a + b) / 2);
       probes++;
-      const s = await probe(commits[mid]);
+      const s = await probe(poolSessions[0], commits[mid]);
       if (s.status === "pass") a = mid + 1;
       else b = mid;
     }

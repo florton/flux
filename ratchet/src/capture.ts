@@ -56,7 +56,7 @@ interface SubjectBinding {
   test?: string;
   seed?: string;
   reason?: string;
-  source: "fast-check" | "junit" | "manual";
+  source: "fast-check" | "junit" | "manual" | "tap";
 }
 
 function currentCommit(cwd: string): string {
@@ -105,21 +105,116 @@ function bindFastCheck(capture: FastCheckCapture, config: RatchetConfig): Subjec
 function parseJUnit(filePath: string): SubjectBinding[] {
   const text = fs.readFileSync(filePath, "utf8");
   const out: SubjectBinding[] = [];
-  const caseRe = /<testcase\b[^>]*name="([^"]+)"[^>]*>([\s\S]*?)<\/testcase>/g;
+  // The testcase body may nest <failure>, <error>, <skipped> and the output
+  // elements; the closing-tag backreference keeps the pairing honest even
+  // when a failure message itself contains "</failure>"-shaped text.
+  const caseRe = /<testcase\b([^>]*)>([\s\S]*?)<\/testcase>/g;
   for (const m of text.matchAll(caseRe)) {
-    const name = decodeXml(m[1]);
+    const name = decodeXml(extractAttr(m[1], "name") ?? "");
+    if (!name) continue;
     const body = m[2];
-    const failRe = /<failure\b[^>]*message="([^"]*)"(?:\s*\/>|>[\s\S]*?<\/failure>)|<failure\b[^>]*>([\s\S]*?)<\/failure>/;
-    const f = failRe.exec(body);
-    if (f) {
+    const failRe = /<(failure|error)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/g;
+    for (const f of body.matchAll(failRe)) {
+      const attrs = f[2];
+      const content = f[3];
+      const message = extractAttr(attrs, "message");
+      // CDATA wraps the reason in unescaped form; message-less failures carry
+      // it as element text (possibly with entities that need decoding).
+      const raw = message ?? (content ? unwrapCdata(content) : "");
       out.push({
         subject: name,
         input: null,
         test: name,
-        reason: decodeXml(f[1] ?? f[2] ?? "failed"),
+        reason: decodeXml(raw.trim() || `${f[1]} in ${name}`),
         source: "junit",
       });
     }
+  }
+  return out;
+}
+
+/** `name="value"` or `name='value'` inside an element's attribute list. */
+function extractAttr(tag: string, name: string): string | undefined {
+  // \b keeps "name" from matching inside "classname" or "nodename".
+  const re = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`);
+  const m = re.exec(tag);
+  return m ? (m[2] ?? m[3]) : undefined;
+}
+
+function unwrapCdata(content: string): string {
+  return content.replace(/^\s*<!\[CDATA\[([\s\S]*)\]\]>\s*$/, "$1").trim();
+}
+
+/**
+ * Parse a TAP stream (v12/v13 — what `node --test --test-reporter=tap` and
+ * most Perl-family runners emit) into test-name rows.
+ *
+ * The failure reason is the diagnostics block's `error`/`message` key when
+ * the reporter wrote one, otherwise the test name — which degrades the row's
+ * witness exactly like a check that prints nothing, and is worth knowing
+ * about, so the reason is the strongest text the stream offers.
+ */
+function parseTap(filePath: string): SubjectBinding[] {
+  const text = fs.readFileSync(filePath, "utf8");
+  const lines = text.split(/\r?\n/);
+  const out: SubjectBinding[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    // Nested subtests are indented in TAP output (node --test does this).
+    const m = /^\s*not ok\s+\d+\s*(?:-\s*)?(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    let name = m[1].trim();
+    // Directives ("# SKIP", "# TODO") mark planned failures; a skipped test
+    // is not a counterexample.
+    const directive = /#\s*(SKIP|TODO)\b/i.exec(name);
+    if (directive) continue;
+    const hashIdx = name.indexOf(" #");
+    if (hashIdx !== -1) name = name.slice(0, hashIdx).trim();
+    if (!name) continue;
+
+    // The diagnostics block is the indented `---` ... `...` span right after
+    // the failing line; collect the error/message key when present.
+    let reason: string | undefined;
+    let j = i + 1;
+    let inDiag = false;
+    const block: string[] = [];
+    while (j < lines.length) {
+      const line = lines[j];
+      if (/^\s+---\s*$/.test(line)) {
+        inDiag = true;
+        j++;
+        continue;
+      }
+      if (inDiag && /^\s+\.\.\.\s*$/.test(line)) {
+        inDiag = false;
+        j++;
+        continue;
+      }
+      if (!inDiag && !/^\s/.test(line)) break;
+      if (inDiag) block.push(line.replace(/^\s{2,}/, ""));
+      j++;
+    }
+    i = j - 1;
+
+    if (block.length > 0) {
+      for (let k = 0; k < block.length; k++) {
+        const em = /^(error|message):\s*(.*)$/.exec(block[k]);
+        if (!em) continue;
+        const value = em[2].trim();
+        if (value !== "" && value !== "|-" && value !== "|") {
+          reason = value;
+          break;
+        }
+        // YAML block scalar: the message continues on more-indented lines.
+        const parts: string[] = [];
+        while (k + 1 < block.length && /^\s/.test(block[k + 1])) {
+          const part = block[++k].trim();
+          if (part) parts.push(part);
+        }
+        reason = parts.join(" ") || undefined;
+        break;
+      }
+    }
+    out.push({ subject: name, input: null, test: name, reason: reason ?? name, source: "tap" });
   }
   return out;
 }
@@ -138,7 +233,9 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
       throw new Error(`capture input not found: ${input}`);
     }
     const text = fs.readFileSync(input, "utf8").trim();
-    if (text.startsWith("<")) {
+    if (/^TAP version \d+/m.test(text)) {
+      bindings = bindings.concat(parseTap(input));
+    } else if (text.startsWith("<")) {
       bindings = bindings.concat(parseJUnit(input));
     } else {
       const parsed = JSON.parse(text);
@@ -297,13 +394,21 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
     }
 
     const at = new Date().toISOString();
+    // The witness that enforces the row comes from the check's own output —
+    // that is what `verify` will be compared against. When the check prints
+    // nothing (reason degrades to `exit <n>`), the parsed capture source may
+    // still know why the test failed, and the row's *display* should carry
+    // that rather than the degraded placeholder. The signature stays
+    // check-derived, so drift detection stays honest either way.
+    const shownReason =
+      b.reason && /^exit \d+$/.test(reason.trim()) ? b.reason : reason;
     const event: CorpusEvent = {
       op: "capture",
       id,
       at,
       subject: b.subject,
       input,
-      reason,
+      reason: shownReason,
       signature,
       ruleHash: rule,
       test: b.test,

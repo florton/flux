@@ -5,12 +5,16 @@
 > ratchet is the part of Flux worth shipping first, and it does not depend on
 > any other part.
 >
-> **Much of this is now built** — see [ratchet/](ratchet/) (v0.5). The corpus,
+> **Much of this is now built** — see [ratchet/](ratchet/) (v0.6). The corpus,
 > the journal, the accept ceremony, owning-rule hashes with quarantine,
-> cause-preserving minimization, replay with sampling and halving, subject
-> validation, and the first behavior snapshot — visual pins, a zero-dependency
-> pixel diff with the accept ceremony applied to screenshots — all exist and
-> are tested. Still design-only: mining deleted tests (mode 2), semantic
+> cause-preserving minimization, replay with sampling and halving (now on
+> parallel worktrees), subject validation, and the first behavior snapshot —
+> visual pins, a zero-dependency pixel diff with the accept ceremony applied
+> to screenshots — all exist and are tested. Capture speaks fast-check,
+> JUnit, and TAP. And the ratchet's **own corpus is populated**: the five v0
+> defects were captured at the commit where they lived and re-pinned to
+> today's instrument, so `ratchet verify` enforces them on every commit of
+> this repository. Still design-only: mining deleted tests (mode 2), semantic
 > history (mode 3), sampled behavioral diffs beyond visual pins, metric
 > budgets, and static checks. `ratchet/README.md` carries the current line
 > between them.
