@@ -1,4 +1,4 @@
-# Ratchet — v0.4 prototype
+# Ratchet — v0.5 prototype
 
 Regression memory for AI-assisted development. The design sketch is
 [../RATCHET.md](../RATCHET.md); this folder is the first working slice.
@@ -9,7 +9,9 @@ Regression memory for AI-assisted development. The design sketch is
 > the second confirmation run, `ratchet replay` with sampling and halving,
 > `ratchet validate`, and self-hosting. The ratchet now runs under itself —
 > its own invariants are validated against the commits where its own bugs
-> lived. 47 tests.
+> lived. v0.5 adds the first *behavior snapshot*: visual pins — screenshots
+> become corpus rows, with a zero-dependency PNG diff as the check's witness.
+> 62 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; everything is a file git already knows how to commit.
@@ -54,10 +56,65 @@ ratchet note --text "..." [--actor name]
 ratchet report                    corpus stats and churn summary
 ratchet fsck                      corpus and journal integrity check
 ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
+ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
+ratchet visual record <subject> --route <url> [--file <png>] [--viewport WxH]
+                       [--tolerance N] [--max-percent P] [--wait-ms ms]
 ```
 
 Every command accepts `--home <dir>` and `--json`. Row ids are
 content-addressed; any unambiguous prefix works where an id is expected.
+
+## Visual regression — behavior snapshots in pixels
+
+Visual pins are the first live behavior snapshot. A subject whose check ends
+in `node {path}/dist/src/visual-cli.js <subject>` treats whatever the check
+pushed to the corpus as pixels to be reproduced:
+
+```json
+{
+  "subjects": {
+    "home-page": {
+      "check": "node C:/dev/app/ratchet/dist/src/visual-cli.js home-page",
+      "owns": ["test/ui/screenshot.js"],
+      "timeoutMs": 120000
+    }
+  }
+}
+```
+
+A visual row's input is a spec like
+`{"file":".ratchet-visual/home.png"}` (your own screenshot tool wrote it) or
+`{"route":"http://localhost:5173/","viewport":1280x800}` (the probe shoots it
+itself with whatever Playwright **or** Puppeteer the project installed — the
+first one wins, and neither is a ratchet dependency). The row's baseline is
+the PNG at `.ratchet/visual/<row-id>.png`; the check, on every `verify`,
+shoots again and pixel-diffs:
+
+- **Zero runtime dependencies.** The PNG codec + diff is
+  [src/visual.ts](src/visual.ts) — Node's `zlib` is the only primitive.
+  8-bit RGBA/grayscale/palette/16-bit input is decoded; the diff reports
+  changed pixels, percent, bounding box, and max channel delta; a review
+  render is written at `.ratchet/visual/<id>-diff.png` (plus `<id>-actual.png`)
+  whenever a row goes red. Both are gitignored by `init`.
+- **The witness is the diff.** "visual diff: 1.37% of 307,200 pixels (9,432,
+  bbox 96x34 at (220,158), max delta 187)" — normalized, it is just another
+  failure signature, so cause-preservation and drift detection work for
+  pixels exactly as they do for values.
+- **The ceremony is unchanged.** The baseline goes red when the UI moves. If
+  the move was intended: `ratchet accept <id> --reason "..."` retires the
+  row, `ratchet visual record <subject> ...` re-pins it — a capture that
+  re-activates the row, keeping the old baseline's hash in the audit trail.
+- **Integrity is mechanical.** `ratchet fsck` hashes each `visual/` baseline
+  against the hash recorded in the corpus and complains about a missing or
+  edited file — a pin that drifted without a ceremony is corruption, not a
+  design decision.
+- **A pin has no witness until it goes red.** Recording captures the pixels,
+  not a failure message — the row is born without a `signature`, so drift
+  reporting starts at the first real diff. That is the honest shape of an
+  expectation that was never observed failing.
+
+`ratchet visual diff <a> <b>` is the same comparison, standalone — useful
+in CI scripts and for reviewing that diff artifact everywhere.
 
 ## Config
 
@@ -282,6 +339,8 @@ worktree before each probe.
   corpus.jsonl     # append-only capture/accept/reopen events (committed)
   journal.jsonl    # append-only decisions (committed)
   .gitattributes   # merge=union for the two JSONL files
+  .gitignore       # visual artifacts (*-actual.png, *-diff.png) stay local
+  visual/<id>.png  # pin baselines, content-addressed like rows (committed)
 ```
 
 Row ids are `c` + the first 12 hex of `sha256(subject + input)`. Sequential
@@ -293,7 +352,7 @@ still retires the row.
 
 ## Self-hosting
 
-The ratchet runs under itself. [`../.ratchet/`](../.ratchet) configures five
+The ratchet runs under itself. [`../.ratchet/`](../.ratchet) configures six
 subjects over this repository, each a check of the checker, each invoked
 through `{home}` so it is carried across history rather than read from the
 tree it measures:
@@ -305,6 +364,10 @@ tree it measures:
 | `reduction-preserves-cause` | a stored row reproduces the bug that was captured | R5 |
 | `recurrence-is-visible` | an accepted row's return is surfaced, not deduplicated | R2 |
 | `stringify-injective` | distinct values never share a dedup key | R20 |
+| `visual-diff-is-sound` | codec round-trip, 1-px diff at the right place, deterministic render | — |
+
+The sixth subject has no historical bug — the visual diff is new in v0.5 —
+so its validation comes from the codec cross-checks in the test suite instead.
 
 All five are validated against `4abc1d5`, the last v0 commit, where those bugs
 actually lived. Replayed across this repository's own history:
@@ -332,8 +395,9 @@ npm run build
 npm test
 ```
 
-47 tests, including one regression test per defect closed from the v0 review.
-The demo is generated by `node demo/setup.js`; see [demo/README.md](demo/README.md).
+62 tests, including one regression test per defect closed from the v0 review
+plus the visual codec/diff/loop tests. The demo is generated by
+`node demo/setup.js`; see [demo/README.md](demo/README.md).
 
 ## What this prototype still leaves out
 
@@ -342,7 +406,8 @@ From the design in [../RATCHET.md](../RATCHET.md), still absent:
 - **Mode 2, mine** — `ratchet history` walking test-file history to resurrect
   deleted and weakened assertions as corpus rows.
 - **Mode 3, semantic history** — behavioral diff between any two commits.
-- **Behavior snapshots** and sampled behavioral diffs.
+- **Sampled behavioral diffs** beyond the visual pins (corpus + boundary
+  catalogue snapshot sets).
 - **Metric budgets** in their baseline-relative form, and static checks.
 - The churn report's catch-rate vs. new-bug split (`report` prints counts).
 - The PR bot and agent attach. `--json` exists; nothing consumes it yet.

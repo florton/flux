@@ -247,6 +247,65 @@ const subjects = {
     }
     pass("events replay in timestamp order regardless of file order");
   },
+
+  /**
+   * The visual diff is the instrument behind the visual pins. Its soundness
+   * properties are checkable without a browser: the codec must round-trip
+   * (a baseline must not rot in storage), the diff must find one moved pixel
+   * in a large field, and the review render must be byte-deterministic.
+   */
+  "visual-diff-is-sound"() {
+    const visual = load("visual");
+    if (!visual.encodePng || !visual.decodePng || !visual.compareImages || !visual.renderDiffImage) {
+      fail("visual.js is missing the expected API — the visual pins' instrument cannot run");
+    }
+    const W = 17;
+    const H = 11;
+    const mk = (fn) => {
+      const data = Buffer.alloc(W * H * 4);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const [r, g, b, a] = fn(x, y);
+          const i = (y * W + x) * 4;
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
+          data[i + 3] = a;
+        }
+      }
+      return data;
+    };
+
+    const src = mk((x, y) => [(x * 15) & 255, (y * 23) & 255, (x ^ y) & 127, 255]);
+    const encoded = visual.encodePng(W, H, src);
+    const decoded = visual.decodePng(encoded);
+    if (decoded.width !== W || decoded.height !== H) {
+      fail(`codec round-trip gave ${decoded.width}x${decoded.height}, expected ${W}x${H}`);
+    }
+    if (!decoded.data.equals(src)) {
+      fail("codec round-trip is lossy — a pinned baseline would rot on every load");
+    }
+
+    const modified = mk((x, y) => (x === 9 && y === 4 ? [255, 0, 0, 255] : [(x * 15) & 255, (y * 23) & 255, (x ^ y) & 127, 255]));
+    const same = visual.compareImages(decoded, visual.decodePng(encoded));
+    if (!same.equal || same.changedPixels !== 0) {
+      fail(`identical pixels reported ${same.changedPixels} changed — the diff has a false positive`);
+    }
+    const diff = visual.compareImages(visual.decodePng(visual.encodePng(W, H, modified)), decoded);
+    if (diff.equal || diff.changedPixels !== 1) {
+      fail(`one moved pixel reported ${diff.changedPixels} changed — the diff has a false negative`);
+    }
+    if (!diff.bbox || diff.bbox.x !== 9 || diff.bbox.y !== 4) {
+      fail(`bbox ${JSON.stringify(diff.bbox)} does not point at (9,4) — review artifacts would mislead`);
+    }
+
+    const r1 = visual.renderDiffImage(decoded, visual.decodePng(visual.encodePng(W, H, modified)));
+    const r2 = visual.renderDiffImage(decoded, visual.decodePng(visual.encodePng(W, H, modified)));
+    if (!visual.encodePng(r1.width, r1.height, r1.data).equals(visual.encodePng(r2.width, r2.height, r2.data))) {
+      fail("the diff render is not deterministic — the same pixels would produce different artifacts");
+    }
+    pass(`codec round-trip, 1-px diff at (9,4), and deterministic render verified on ${W}x${H}`);
+  },
 };
 
 if (!subject || !subjects[subject]) {

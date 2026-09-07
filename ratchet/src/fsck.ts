@@ -1,8 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "crypto";
 import { foldCorpus, isLegacyId, readCorpus, rowId, stableStringify } from "./corpus";
 import { readJournalFile } from "./journal";
-import type { LineProblem, RatchetConfig } from "./types";
+import type { CorpusEvent, LineProblem, RatchetConfig } from "./types";
 
 export interface FsckFinding {
   kind:
@@ -11,7 +12,9 @@ export interface FsckFinding {
     | "orphan-event"
     | "id-mismatch"
     | "legacy-id"
-    | "unconfigured-subject";
+    | "unconfigured-subject"
+    | "visual-baseline-missing"
+    | "visual-baseline-hash-mismatch";
   severity: "error" | "warning" | "info";
   detail: string;
 }
@@ -83,12 +86,63 @@ export function fsck(ratchetDir: string): FsckReport {
     }
   }
 
+  // Visual pins carry a second integrity surface: the baseline PNG next to
+  // the JSONL. A row whose baseline file went missing (or was edited) is
+  // enforcing against pixels it no longer describes — the check would fail
+  // on a restored file and pass on a stray one. `fsck` makes that visible as
+  // corruption rather than as a mysterious red/green elsewhere.
+  const visualCheck = checkVisualBaselines(ratchetDir, events, rows);
+  for (const f of visualCheck) findings.push(f);
+
   return {
     findings,
     rows: rows.size,
     events: events.length,
     ok: !findings.some((f) => f.severity === "error"),
   };
+}
+
+/** Validate that each visual row's baseline file is present and hash-true. */
+function checkVisualBaselines(
+  ratchetDir: string,
+  events: CorpusEvent[],
+  rows: Map<string, { id: string }>
+): FsckFinding[] {
+  const findings: FsckFinding[] = [];
+  const latest = new Map<string, { sha256?: string; png: string; at: number }>();
+  for (const ev of events) {
+    if (ev.op !== "capture" || ev.source !== "visual" || !ev.expected) continue;
+    const meta = ev.expected as { sha256?: string; png?: string };
+    if (typeof meta.png !== "string") continue;
+    const at = Date.parse(ev.at);
+    const prev = latest.get(ev.id);
+    // Unparseable timestamps compare as "keep the existing", i.e. file order.
+    if (!prev || (!Number.isNaN(at) && (Number.isNaN(prev.at) || at >= prev.at))) {
+      latest.set(ev.id, { sha256: meta.sha256, png: meta.png, at });
+    }
+  }
+  const push = (kind: FsckFinding["kind"], severity: FsckFinding["severity"], detail: string) =>
+    findings.push({ kind, severity, detail });
+  for (const row of rows.values()) {
+    const meta = latest.get(row.id);
+    if (!meta) continue;
+    const rel = path.join(ratchetDir, "visual", meta.png);
+    if (!fs.existsSync(rel)) {
+      push("visual-baseline-missing", "error", `${row.id} baseline file is gone (${meta.png}) — restore it from git or re-record`);
+      continue;
+    }
+    if (meta.sha256) {
+      const actual = createHash("sha256").update(fs.readFileSync(rel)).digest("hex");
+      if (actual !== meta.sha256) {
+        push(
+          "visual-baseline-hash-mismatch",
+          "error",
+          `${row.id} baseline ${meta.png} does not hash to the recorded ${meta.sha256.slice(0, 12)}… (is ${actual.slice(0, 12)}…) — the pin no longer identifies what it claims`
+        );
+      }
+    }
+  }
+  return findings;
 }
 
 export function formatFsck(report: FsckReport): string {

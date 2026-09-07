@@ -158,6 +158,82 @@ $ $R verify --home "$MEM/.ratchet"
 0/1 rows pass, 1 failing
 ```
 
+## Visual regression: pinning the pixels
+
+The same machinery that watches the round-trip also watches pixels — the
+row's check just becomes "render the page, compare against the pinned
+baseline, report the diff as the witness". This demo's "browser" is a
+deterministic JS renderer (`render-page.js`) drawing the home page from the
+design tokens in `page-spec.json`; a real project would run Playwright here
+and the ratchet side would not change.
+
+```
+<home page with an ocean theme>     renderer + spec land, nothing pinned yet
+<pin>                               pin the home page pixels (ratchet visual row)
+(visual-bug) theme refresh: warm accent on the home page     the pixels move
+(revert theme back to ocean)                                  pixels return
+```
+
+`visual-bug`'s parent, the pin commit, recorded the visual row:
+`.ratchet/visual/<id>.png` holds the baseline and `corpus.jsonl` holds the
+capture event with `"source": "visual"`.
+
+### 1. Pinned pixels pass — and a change does not
+
+```
+$ $R verify
+✓ c32e0364b168e home-page
+
+1/1 rows pass
+
+$ git checkout visual-bug
+$ $R verify
+✗ c32e0364b168e home-page {"file":".ratchet-visual/home.png"} — rendered home page (spec: lava)
+  visual diff: 100% of 64000 pixels (64000, bbox 320x200 at (0,0), max channel delta 164) —
+  actual: visual/c32e0364b168e-actual.png — diff: visual/c32e0364b168e-diff.png
+
+0/1 rows pass, 1 failing
+```
+
+That one line on stdout is the witness — normalized, it feeds failure
+signatures and drift detection exactly like the round-trip's message does.
+The `-actual.png` and `-diff.png` files are review artifacts for the
+developer and are gitignored; `.ratchet/visual/<id>.png` (the baseline) is
+committed.
+
+### 2. Which commit moved the pixels?
+
+```
+$ $R bisect c32e036 --good de9c8ca --bad visual-bug
+bisecting row c32e036 (good=de9c8ca, bad=visual-bug)...
+first bad commit: ccb4d1e379273  (2 probes)   # theme refresh: warm accent on the home page
+```
+
+### 3. The ceremony, for pixels too
+
+The change was on purpose — the theme is visibly being refreshed. What the
+ratchet must never allow is re-deriving the expectation silently, so the
+retirement is on the record and the new baseline goes through the same
+capture:
+
+```
+$ $R accept c32e036 --reason "warm accent theme is the intended design going forward" --actor alice
+accepted c32e0364b168e — expectation retired, audit trail retained
+
+$ $R visual record home-page --file .ratchet-visual/home.png --actor alice
+recorded c32e0364b168e home-page — baseline .ratchet/visual/c32e0364b168e.png (sha256 e2b5a095a161…, size 1357 bytes)
+note: this row was retired — the new capture re-activates it
+
+$ $R verify
+✓ c32e0364b168e home-page
+
+1/1 rows pass
+```
+
+`$R show c32e036` tells the whole story — capture, accept, re-record — and
+`$R fsck` audits the baseline against the recorded hash, so a hand-edited
+PNG is mechanical corruption, not a mystery.
+
 ## The witness
 
 `check.js` prints why it failed, which is the strong form of the check

@@ -12,6 +12,7 @@ import { validate, formatValidate } from "./validate";
 import { fsck, formatFsck } from "./fsck";
 import { listRows, formatList, showRow, formatRow } from "./inspect";
 import { appendJournal } from "./journal";
+import { recordVisual, diffImageFiles, describeDiff, ratchetHome, type VisualInput } from "./visual-cli";
 
 function usage(): string {
   return `ratchet — regression memory for AI-assisted development
@@ -31,6 +32,10 @@ function usage(): string {
   ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
   ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects]
   ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]
+  ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
+  ratchet visual record <subject> --route <url-or-route> [--viewport WxH] [--tolerance N]
+                                   [--max-percent P] [--wait-ms ms]
+                                   [--file <png>]   (use your own screenshot tool)
 
 Every command takes --home <dir> and --json. Row ids are content-addressed;
 any unambiguous prefix works. A check may exit 125 to report "not applicable
@@ -70,6 +75,8 @@ const VALUE_FLAGS = new Set([
   "--row", "--subject", "--home", "--reason", "--actor",
   "--good", "--bad", "--setup", "--text", "--status", "--jobs",
   "--every", "--known-bad", "--known-good", "--input", "--confirm",
+  "--route", "--file", "--viewport", "--tolerance", "--max-percent",
+  "--wait-ms", "--out",
 ]);
 
 function parseArgs(args: string[]): Args {
@@ -133,9 +140,12 @@ async function main(): Promise<void> {
       fs.writeFileSync(path.join(dir, "journal.jsonl"), "", "utf8");
       // Union-merge keeps two branches' appends from conflicting on the last
       // line; content-addressed ids keep them from colliding once merged.
+      fs.writeFileSync(path.join(dir, ".gitattributes"), "corpus.jsonl merge=union\njournal.jsonl merge=union\n", "utf8");
+      // Screenshot artifacts are repro output, not memory: the baselines are
+      // committed, the failure artifacts generated at verify time are not.
       fs.writeFileSync(
-        path.join(dir, ".gitattributes"),
-        "corpus.jsonl merge=union\njournal.jsonl merge=union\n",
+        path.join(dir, ".gitignore"),
+        "visual/*-actual.png\nvisual/*-diff.png\n",
         "utf8"
       );
       console.log("created .ratchet/ — configure subjects in .ratchet/config.json");
@@ -348,6 +358,78 @@ async function main(): Promise<void> {
       });
       emit(json, result, formatValidate(result));
       if (!result.valid) process.exit(1);
+      break;
+    }
+
+    case "visual": {
+      const cwd = requireRoot();
+      const sub = positionals[0];
+      if (sub === "diff") {
+        const a = positionals[1];
+        const b = positionals[2];
+        if (!a || !b) {
+          console.error('usage: ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]');
+          process.exit(1);
+        }
+        const perPixel = flags.get("--tolerance") !== undefined ? parseInt(flags.get("--tolerance")!, 10) : undefined;
+        const maxPercent = flags.get("--max-percent") !== undefined ? parseFloat(flags.get("--max-percent")!) : undefined;
+        const { stats, diffPng } = diffImageFiles(path.resolve(cwd, a), path.resolve(cwd, b), { perPixel, maxPercent });
+        const out = flags.get("--out");
+        let outLine = "";
+        if (out !== undefined) {
+          fs.writeFileSync(path.resolve(cwd, out), diffPng);
+          outLine = `; diff written to ${out}`;
+        }
+        if (json) {
+          console.log(JSON.stringify({ ...stats, outPng: out ?? null }, null, 2));
+        } else {
+          console.log(describeDiff(stats, []) + outLine);
+        }
+        if (!stats.equal) process.exit(1);
+        break;
+      }
+      if (sub === "record") {
+        const subject = positionals[1];
+        if (!subject || (!flags.get("--route") && !flags.get("--file"))) {
+          console.error('usage: ratchet visual record <subject> --route <url> [--file <png>] [--viewport WxH --tolerance N --max-percent P --wait-ms ms]');
+          process.exit(1);
+        }
+        const viewport: string | undefined = flags.get("--viewport");
+        let width: number | undefined;
+        let height: number | undefined;
+        if (viewport) {
+          const m = /^(\d+)[xX](\d+)$/.exec(viewport);
+          if (!m) {
+            console.error(`--viewport must be WxH, got "${viewport}"`);
+            process.exit(1);
+          }
+          width = parseInt(m[1], 10);
+          height = parseInt(m[2], 10);
+        }
+        const input: VisualInput = {
+          route: flags.get("--route"),
+          file: flags.get("--file"),
+          width,
+          height,
+          waitMs: flags.get("--wait-ms") !== undefined ? parseInt(flags.get("--wait-ms")!, 10) : undefined,
+          tolerance: flags.get("--tolerance") !== undefined ? parseInt(flags.get("--tolerance")!, 10) : undefined,
+          maxPercent: flags.get("--max-percent") !== undefined ? parseFloat(flags.get("--max-percent")!) : undefined,
+        };
+        const result = await recordVisual(cwd, subject, input, flags.get("--actor"));
+        emit(
+          json,
+          result,
+          `recorded ${result.id} ${subject} — baseline .ratchet/visual/${result.pngName} (sha256 ${result.sha256.slice(0, 12)}…, size ${fs.statSync(path.join(ratchetHome(cwd), "visual", result.pngName)).size} bytes)` +
+            (result.previousStatus === "active"
+              ? "\nnote: row was already active — the previous baseline is replaced in place; its hash is kept in the corpus audit trail"
+              : result.previousStatus === "archived"
+                ? "\nnote: this row was retired — the new capture re-activates it"
+                : "")
+        );
+        break;
+      }
+      console.error('usage: ratchet visual <diff|record> ...');
+      process.exit(1);
       break;
     }
 

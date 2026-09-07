@@ -47,7 +47,7 @@ export interface CorpusEvent {
   test?: string;
   seed?: string;
   commit?: string;
-  source: "fast-check" | "junit" | "manual";
+  source: "fast-check" | "junit" | "manual" | "visual";
 }
 
 export type RowStatus = "active" | "archived";

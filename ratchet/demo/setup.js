@@ -92,6 +92,7 @@ const { parseDuration, formatDuration } = require("./parseDuration");
 
 const subject = process.argv[2];
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
+const JUDGE = __JUDGE__;
 
 if (subject === "roundtrip") {
   const got = parseDuration(formatDuration(input));
@@ -101,6 +102,22 @@ if (subject === "roundtrip") {
   // degrades both to "still exits nonzero".
   console.log(\`round-trip failed: \${input} formatted to "\${formatDuration(input)}" and parsed back as \${JSON.stringify(got)}\`);
   process.exit(1);
+}
+if (subject === "home-page") {
+  // The subject's row input reaches this check on stdin. The screen is
+  // rendered fresh from the committed spec, then the ratchet's own visual
+  // probe compares it against the pinned baseline and produces the witness.
+  // The judge path is absolute so a ratchet bisect worktree — which lives
+  // outside the repo — still measures with the same frozen instrument.
+  const { spawnSync } = require("child_process");
+  const path = require("path");
+  const render = spawnSync(process.execPath, [path.join(__dirname, "render-page.js")], { stdio: "inherit" });
+  if (render.status !== 0) process.exit(1);
+  const result = spawnSync(process.execPath, [JUDGE, "home-page"], {
+    input: JSON.stringify(input),
+    stdio: ["pipe", "inherit", "inherit"],
+  });
+  process.exit(result.status ?? 1);
 }
 console.log(\`unknown subject: \${subject}\`);
 process.exit(1);
@@ -151,7 +168,16 @@ console.log("property passes");
 `;
 
 const CONFIG = JSON.stringify(
-  { subjects: { roundtrip: { check: "node check.js roundtrip", captureProperty: "roundtrip" } } },
+  {
+    subjects: {
+      roundtrip: { check: "node check.js roundtrip", captureProperty: "roundtrip" },
+      "home-page": {
+        check: "node check.js home-page",
+        owns: ["check.js", "render-page.js"],
+        timeoutMs: 60_000,
+      },
+    },
+  },
   null,
   2
 ) + "\n";
@@ -161,7 +187,7 @@ const CONFIG = JSON.stringify(
 fs.mkdirSync(target, { recursive: true });
 git("init", "-q", "-b", "main");
 
-write(".gitignore", "node_modules/\nratchet-capture.json\n");
+write(".gitignore", "node_modules/\nratchet-capture.json\n.ratchet-visual/\n");
 write("package.json", JSON.stringify({
   name: "ratchet-demo",
   version: "1.0.0",
@@ -170,11 +196,12 @@ write("package.json", JSON.stringify({
   scripts: { test: "node property.js" },
   dependencies: { "fast-check": "3.23.2" },
 }, null, 2) + "\n");
-write("check.js", CHECK);
+write("check.js", CHECK.replace("__JUDGE__", JSON.stringify(path.join(__dirname, "..", "dist", "src", "visual-cli.js"))));
 write(".ratchet/config.json", CONFIG);
 write(".ratchet/corpus.jsonl", "");
 write(".ratchet/journal.jsonl", "");
 write(".ratchet/.gitattributes", "corpus.jsonl merge=union\njournal.jsonl merge=union\n");
+write(".ratchet/.gitignore", "visual/*-actual.png\nvisual/*-diff.png\n");
 
 write("parseDuration.js", parseDuration({ hoursMultiplier: 3600, zeroFormat: "0s" }));
 write("property.js", property({ min: 0, zeroContract: false }));
@@ -191,6 +218,84 @@ commit("format zero as empty string", "intentional-zero");
 
 write("property.js", property({ min: 1, zeroContract: true }));
 commit("spec update: zero formats as empty string", "v2");
+
+// ------------------------------------------------ the visual regression story
+//
+// The ratchet cannot see a browser, but a visual pin is just a check: render
+// the page, compare against the pinned pixels, report the diff as the witness.
+// This demo's "browser" is a deterministic pure-JS renderer that draws the
+// home page from design tokens — a real project would run Playwright here,
+// and the ratchet side is identical.
+
+const RENDER = `#!/usr/bin/env node
+/**
+ * The fake browser in this demo: a deterministic pure-JS page renderer.
+ *
+ * The visual probe needs a "screenshot"; this project has no browser, so the
+ * page is drawn here, pixel by pixel, from the design tokens committed in
+ * page-spec.json. Same idea, zero process drag — the check contract, the
+ * corpus row, and the witness are exactly what a Playwright-based subject
+ * would have. Swap this renderer for \`page.goto(url) + screenshot()\` and
+ * nothing else in the walkthrough changes.
+ */
+const fs = require("fs");
+const path = require("path");
+const { encodePng } = require(__VISUAL__);
+
+const W = 320;
+const H = 200;
+const spec = JSON.parse(fs.readFileSync(path.join(__dirname, "page-spec.json"), "utf8"));
+
+const page = Buffer.alloc(W * H * 4);
+const put = (x, y, rgb) => {
+  if (x < 0 || y < 0 || x >= W || y >= H) return;
+  const i = (y * W + x) * 4;
+  page[i] = rgb[0];
+  page[i + 1] = rgb[1];
+  page[i + 2] = rgb[2];
+  page[i + 3] = 255;
+};
+const fillRect = (x0, y0, w, h, rgb) => {
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) put(x, y, rgb);
+};
+
+fillRect(0, 0, W, H, spec.background);              // page
+fillRect(0, 0, W, 32, spec.header);                  // header bar
+fillRect(0, 32, spec.sidebarWidth, H - 32, spec.sidebar); // sidebar
+fillRect(12, 44, 96, 12, spec.accent);               // title
+fillRect(12, 64, 200, 8, spec.text);                 // body lines
+fillRect(12, 78, 200, 8, spec.text);
+fillRect(12, 92, 128, 8, spec.text);
+fillRect(spec.sidebarWidth + 16, H - 44, 92, 28, spec.accent); // CTA button
+
+fs.mkdirSync(path.join(__dirname, ".ratchet-visual"), { recursive: true });
+fs.writeFileSync(path.join(__dirname, ".ratchet-visual", "home.png"), encodePng(W, H, page));
+console.log("rendered home page (spec:", spec.name + ")");
+`;
+
+const ocean = JSON.stringify({ name: "ocean", background: [20, 24, 60], header: [40, 52, 120], sidebar: [28, 36, 84], sidebarWidth: 64, text: [196, 208, 240], accent: [62, 132, 212] });
+const lava = JSON.stringify({ name: "lava", background: [64, 20, 16], header: [176, 44, 32], sidebar: [112, 30, 22], sidebarWidth: 64, text: [236, 216, 200], accent: [214, 146, 48] });
+
+write("render-page.js", RENDER.replace("__VISUAL__", JSON.stringify(path.join(__dirname, "..", "dist", "src", "visual.js"))));
+write("page-spec.json", ocean);
+commit("home page with an ocean theme");
+
+// Render once, then pin the pixels — the human's eye says "good".
+const renderOnce = spawnSync(process.execPath, [path.join(target, "render-page.js")], { cwd: target, encoding: "utf8" });
+if (renderOnce.status !== 0) throw new Error(`render failed: ${renderOnce.stderr || renderOnce.stdout}`);
+const RATCHET = path.join(__dirname, "..", "dist", "src", "index.js");
+const record = spawnSync(process.execPath, [RATCHET, "visual", "record", "home-page", "--file", ".ratchet-visual/home.png"], {
+  cwd: target,
+  encoding: "utf8",
+});
+if (record.status !== 0) throw new Error(`visual record failed: ${record.stderr || record.stdout}`);
+commit("pin the home page pixels (ratchet visual row)");
+
+write("page-spec.json", lava);
+commit("theme refresh: warm accent on the home page", "visual-bug");
+
+write("page-spec.json", ocean);
+commit("revert theme back to ocean");
 
 console.log(`built ${target}`);
 console.log(git("log", "--oneline", "--decorate", "--reverse"));

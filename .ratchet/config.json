@@ -19,6 +19,10 @@
     "fold-is-order-independent": {
       "check": "node {home}/tools/selfcheck.js fold-is-order-independent",
       "owns": [".ratchet/tools/selfcheck.js"]
+    },
+    "visual-diff-is-sound": {
+      "check": "node {home}/tools/selfcheck.js visual-diff-is-sound",
+      "owns": [".ratchet/tools/selfcheck.js"]
     }
   }
 }
