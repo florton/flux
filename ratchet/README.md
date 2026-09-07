@@ -2,6 +2,8 @@
 
 Regression memory for AI-assisted development. The design sketch is
 [../RATCHET.md](../RATCHET.md); this folder is the working implementation.
+Known defects and accepted trade-offs are in
+[../ISSUES_RATCHET_V09.md](../ISSUES_RATCHET_V09.md).
 
 > **Status.** All 21 issues from the v0 review
 > ([../ISSUES_RATCHET.md](../ISSUES_RATCHET.md)) are closed, and v0.4 closed
@@ -205,6 +207,29 @@ it is working and is not:
 - **A nonzero exit from the instrument**, unless the heuristic explicitly
   measures `the exit code`. Reading numbers out of a crashed command is reading
   noise.
+
+**Comments and quoting.** `#` starts a comment at the start of a line or after
+whitespace, and a comment runs to the end of the line. Inside a double-quoted
+value it is an ordinary character: `line does not contain "debug # verbose"`
+names a value containing a `#`, and
+`measure tagged count of lines matching " #tag"` matches a hash after a space.
+
+> **Through v0.9 this was wrong, and it was the worst kind of wrong.** The
+> stripper had no notion of quoting, so that rule truncated to
+> `line does not contain "debug` — a *weaker* rule, which passed against output
+> the file plainly forbids. Truncation makes `contains`, `is`, `starts with`
+> and `ends with` stricter, so those failed red and got noticed; it made the
+> negated forms laxer, and those went green. Worse, `ratchet fmt` wrote the
+> truncation back into the file, so the author's original text was destroyed on
+> the first format. Now fixed, with a regression test in each direction; the
+> repro is R22 in [../ISSUES_RATCHET_V09.md](../ISSUES_RATCHET_V09.md).
+>
+> **If your rules file has a `#` inside a quoted value**, that clause is now
+> read as written, so its text — and therefore its rule hash — changes. Rows
+> armed against the truncated rule quarantine with "the heuristic moved", which
+> is correct: the rule genuinely did change, to the one the file always said.
+> Re-arm them once you have read the clause. Check with `ratchet heuristics`,
+> which prints each rule as it will be enforced.
 
 ### Determinism: `seed`
 
@@ -790,6 +815,21 @@ commits out in place and the distinction could not bite. v0.4 moved history
 into worktrees and made it bite. A *directory* argument is deliberately not an
 instrument: `node --test dist/test/` measures the tree it points at, and reading
 the checked-out commit's tests is the whole point of that subject.
+
+**How much of the command it reads.** For a `"shell": true` subject the command
+is split on `&&`, `||`, `;` and `|` — outside quotes, so the operator in
+`node -e "a && b"` stays part of the argument — and every segment is examined.
+Each instrument found inside the tree is its own warning with its own fix.
+Through v0.9 only the first command was read, so `cd . && node tools/check.js`
+was silent on exactly the shape this check exists to name (R24). Grouping
+(`(...)`, `$(...)`), redirection and a trailing `&` are not modelled: this
+reads far enough to find program names, not far enough to be a shell.
+
+One narrowing predates the split and survives it: in shell mode a segment whose
+program is `sh`, `bash` or `zsh` is skipped, because what follows `sh -c` is a
+script *body*, not a path. The cost is that `bash tools/setup.sh` is not
+reported while `./tools/setup.sh` is. Run the script directly, or reach it
+through `{home}`, if you want it checked.
 
 ## Capture sources
 

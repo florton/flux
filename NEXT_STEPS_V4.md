@@ -43,6 +43,15 @@
 > inherited from the outer probe, so they passed alone and failed when the
 > suite ran as a heuristic's own instrument.
 >
+> **Issues are in [ISSUES_RATCHET_V09.md](ISSUES_RATCHET_V09.md)**, reproduced
+> by execution in the usual way. All six defects there are now closed. The
+> critical one predated this work: a `#` preceded by whitespace inside a quoted
+> clause value was stripped as a comment, which truncated the rule silently and
+> could green a gate over a property the file plainly forbids — and `fmt` then
+> wrote the truncation back to disk. What remains open in that file is the part
+> that was never a defect: the accepted trade-offs, the unreproduced
+> observation O1, and the plan work below that is not built.
+>
 > **And one new uniformity invariant**, `proof-tiers-reach-every-report`, for a
 > bug this session shipped and then caught: `ratchet yield` reported a
 > subject as validated against history while `ratchet guard`, in the same run,

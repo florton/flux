@@ -17,10 +17,10 @@ heuristic test-suite
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   rule     failing is 0
-  rule     passing is at least 193
+  rule     passing is at least 203
   rule     status is one of 0, 1
   rejects  failing 1
-  rejects  passing 192
+  rejects  passing 202
   rejects  status 7
   note     the exit code is measured so that a red suite is judged by its own
   note     counts -- "failing measured 1" -- instead of short-circuiting as a

@@ -10,7 +10,7 @@ import { readJournal } from "../src/journal";
 import { proveSubjects } from "./proof";
 import { verify, emptyGateWarning } from "../src/verify";
 import { subjectProofs, PROOF_LABEL } from "../src/proof";
-import { instrumentPath } from "../src/instrument";
+import { instrumentPath, instrumentPaths } from "../src/instrument";
 import { loadSubjects } from "../src/paths";
 
 const NODE = JSON.stringify(process.execPath);
@@ -194,6 +194,25 @@ test("guard warns on unvalidated subjects, and --strict makes it fatal", async (
   const strict = await guard(p.root, { ratchetHome: p.home, strict: true });
   assert.equal(strict.ok, false);
   assert.match(strict.steps.find((s) => s.name === "validation")!.detail, /ratchet validate s --known-bad/);
+});
+
+test("guard offers `rejects` only to a subject that has a rules-file block", async () => {
+  // `rejects` is a clause in heuristics.rules. A subject declared in
+  // config.json has no block and cannot have one, and a gate that tells you to
+  // do an impossible thing is a gate you stop reading. History proof suits
+  // both, so that line is always offered.
+  const only = project();
+  const scripted = await guard(only.root, { ratchetHome: only.home, strict: true });
+  const advice = scripted.steps.find((s) => s.name === "validation")!.detail;
+  assert.match(advice, /no proof they can fail: s/);
+  assert.doesNotMatch(advice, /rejects/, "a scripted subject cannot take this advice");
+
+  // With an unproven prose subject in the mix the line comes back, and says
+  // which of the two it is for.
+  const mixed = project("heuristic h\n  run node x.js\n  measure n the exit code\n  rule n is 0\n");
+  const both = await guard(mixed.root, { ratchetHome: mixed.home, strict: true });
+  const mixedAdvice = both.steps.find((s) => s.name === "validation")!.detail;
+  assert.match(mixedAdvice, /or without it for h, in the rules: rejects <measure>/);
 });
 
 test("guard flags a gate that is mostly not-applicable", async () => {
@@ -395,6 +414,35 @@ test("instrumentPath names the program, not a flag, a directory or a bare comman
   assert.equal(instrumentPath("./tools/check.sh", false), "./tools/check.sh");
   assert.equal(instrumentPath("npm run verify", false), undefined, "a bare command resolves on PATH");
   assert.equal(instrumentPath("node {home}/tools/check.js", false), "{home}/tools/check.js");
+});
+
+test("a shell-mode check names its instrument in any command, not only the first", () => {
+  // The detector read `argv[0]` and stopped, so it missed exactly the shape it
+  // exists to name: `cd . && node tools/check.js` reaches into the measured
+  // tree through its *second* command, and `cd` is not an interpreter.
+  assert.deepEqual(instrumentPaths("cd . && node tools/check.js", true), ["tools/check.js"]);
+  assert.deepEqual(instrumentPaths("echo hi | node tools/check.js", true), ["tools/check.js"]);
+  assert.deepEqual(instrumentPaths("setup ; node tools/check.js", true), ["tools/check.js"]);
+  assert.deepEqual(instrumentPaths("node a.js || node b.js", true), ["a.js", "b.js"], "each one is its own finding");
+
+  // A quoted operator belongs to the argument; the shell never sees it.
+  assert.deepEqual(instrumentPaths('node -e "a && b"', true), ["a && b"]);
+  // And without a shell the operators are ordinary arguments to `cd`.
+  assert.deepEqual(instrumentPaths("cd . && node tools/check.js", false), []);
+});
+
+test("a chained shell check is reported as a frozen instrument", async () => {
+  // The end of the same defect: the warning, not just the path list.
+  const p = project();
+  fs.writeFileSync(
+    path.join(p.home, "config.json"),
+    JSON.stringify({ subjects: { s: { check: "cd . && " + NODE + " check.js", shell: true, captureProperty: "p" } } }),
+    "utf8"
+  );
+  const r = await guard(p.root, { ratchetHome: p.home });
+  const frozen = r.steps.find((s) => s.name === "frozen instrument");
+  assert.ok(frozen, "a chained check reaching into the tree must still be named");
+  assert.match(frozen.detail, /check\.js, which is inside that tree/);
 });
 
 test("a directory argument is not an instrument", async () => {

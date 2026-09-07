@@ -56,13 +56,66 @@ const INTERPRETERS = new Set([
 ]);
 
 /**
- * The path a command reaches its instrument through, if it names one.
+ * The parts of a shell command that each begin a new program.
+ *
+ * Splitting is quote-aware: the operator in `node -e "a && b"` is inside a
+ * string, so that command is one segment. Grouping (`(...)`, `$(...)`),
+ * redirection and a trailing `&` are not modelled — this reads far enough to
+ * find the program names, not far enough to be a shell. Anything it fails to
+ * split is read as a single segment, which is what it did before.
+ */
+export function shellSegments(command: string): string[] {
+  const parts: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+    const two = command.slice(i, i + 2);
+    if (two === "&&" || two === "||") { parts.push(cur); cur = ""; i++; continue; }
+    if (ch === ";" || ch === "|" || ch === "\n") { parts.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  parts.push(cur);
+  return parts.map((p) => p.trim()).filter((p) => p !== "");
+}
+
+/**
+ * Every path a command reaches an instrument through, in order, deduplicated.
+ *
+ * A shell-mode check runs more than one program, and the instrument is not
+ * always the first: `cd . && node tools/check.js` reaches into the measured
+ * tree through its *second* command, and reading only `argv[0]` sees `cd` and
+ * reports nothing. That was a missed warning on exactly the shape the check
+ * exists to name.
+ */
+export function instrumentPaths(command: string, shell: boolean): string[] {
+  const found: string[] = [];
+  for (const segment of shell ? shellSegments(command) : [command]) {
+    const one = instrumentInSegment(segment, shell);
+    if (one !== undefined && !found.includes(one)) found.push(one);
+  }
+  return found;
+}
+
+/** The first instrument a command names, if it names one. */
+export function instrumentPath(command: string, shell: boolean): string | undefined {
+  return instrumentPaths(command, shell)[0];
+}
+
+/**
+ * The path one command reaches its instrument through, if it names one.
  *
  * A *directory* argument is deliberately not an instrument: `node --test
  * ratchet/dist/test/` measures the tree it points at, and reading the
  * checked-out commit's tests is the whole point of that subject.
  */
-export function instrumentPath(command: string, shell: boolean): string | undefined {
+function instrumentInSegment(command: string, shell: boolean): string | undefined {
   let argv: string[];
   try {
     argv = tokenize(command);
@@ -104,39 +157,41 @@ export function instrumentsInsideTree(cwd: string, config: RatchetConfig): Instr
     if (command === undefined) continue;
     if (SUBSTITUTION_TOKENS.some((t) => command.includes(t))) continue;
 
-    const named = instrumentPath(command, shell);
-    if (named === undefined) continue;
+    // Every instrument the command reaches, not just the first: a chained
+    // check can name one program outside the tree and the next one inside it,
+    // and each is its own finding with its own fix.
+    for (const named of instrumentPaths(command, shell)) {
+      const abs = path.resolve(cwd, named);
+      const rel = path.relative(cwd, abs);
+      if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) continue;
 
-    const abs = path.resolve(cwd, named);
-    const rel = path.relative(cwd, abs);
-    if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(abs);
+      } catch {
+        // A check pointing at a file that is not there is simply broken, and
+        // `verify` says so in the words of the failure. Not this finding.
+        continue;
+      }
+      if (stat.isDirectory()) continue;
 
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(abs);
-    } catch {
-      // A check pointing at a file that is not there is simply broken, and
-      // `verify` says so in the words of the failure. Not this finding.
-      continue;
+      const relative = rel.split(path.sep).join("/");
+      const tracked = !insideGit || git(cwd, ["ls-files", "--error-unmatch", "--", relative]).status === 0;
+      findings.push({
+        subject,
+        instrument: named,
+        relative,
+        tracked,
+        detail: tracked
+          ? `"${subject}" measures the tree through ${relative}, which is inside that tree: ` +
+            `across history it runs each commit's own copy of the instrument, so the readings are not comparable`
+          : `"${subject}" measures the tree through ${relative}, which is inside that tree and untracked: ` +
+            `in a worktree the file is simply absent, so replay, adopt, bisect and validate cannot run it at all`,
+        fix:
+          `move it under the ratchet home and reach it through the token, as in: ` +
+          command.split(named).join("{home}/" + path.basename(named)),
+      });
     }
-    if (stat.isDirectory()) continue;
-
-    const relative = rel.split(path.sep).join("/");
-    const tracked = !insideGit || git(cwd, ["ls-files", "--error-unmatch", "--", relative]).status === 0;
-    findings.push({
-      subject,
-      instrument: named,
-      relative,
-      tracked,
-      detail: tracked
-        ? `"${subject}" measures the tree through ${relative}, which is inside that tree: ` +
-          `across history it runs each commit's own copy of the instrument, so the readings are not comparable`
-        : `"${subject}" measures the tree through ${relative}, which is inside that tree and untracked: ` +
-          `in a worktree the file is simply absent, so replay, adopt, bisect and validate cannot run it at all`,
-      fix:
-        `move it under the ratchet home and reach it through the token, as in: ` +
-        command.split(named).join("{home}/" + path.basename(named)),
-    });
   }
   return findings;
 }

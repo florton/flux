@@ -378,6 +378,73 @@ export function unquoteEscaped(s: string): string | undefined {
   );
 }
 
+/**
+ * Drop a trailing `# comment` from one source line.
+ *
+ * Quoting decides this, and getting it wrong is not cosmetic. A rule reading
+ * `line does not contain "debug # verbose"` names a value that contains a
+ * `#`; stripping there truncates the clause to `does not contain "debug`,
+ * which is a *weaker* rule — the value it now looks for cannot occur — so it
+ * passes while the property the file names is violated. Truncation tightens
+ * `contains`, `is`, `starts with` and `ends with`, which fail red and get
+ * noticed; it loosens the negated forms, which do not.
+ *
+ * Quoted spans are paired the way `canonicalizeClause` pairs them when it
+ * lifts literals out before rewriting — every `"` toggles — so the stripper
+ * and the rewriter cannot disagree about where a literal is.
+ *
+ * A `#` still only opens a comment at the start of a line or after
+ * whitespace, so `matching "#tag"` and a `run` command containing `x#y` are
+ * left alone.
+ *
+ * The single form this cannot see is a backslash-escaped quote inside
+ * `rejects output "a \" # b"`: pairing closes the span at the escaped quote
+ * and the `#` after it is stripped. That direction fails loudly — what is
+ * left is no longer one double-quoted string and the clause is refused —
+ * whereas escape-aware pairing would swallow the rest of the line after any
+ * value ending in a backslash, which an extractor label holding a Windows
+ * path does.
+ *
+ * The result is always a prefix of the input, so a column measured against
+ * it is also a column into the original line.
+ */
+export function stripComment(raw: string): string {
+  let quoted = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '"') { quoted = !quoted; continue; }
+    if (c === "#" && !quoted && (i === 0 || /\s/.test(raw[i - 1]))) return raw.slice(0, i);
+  }
+  return raw;
+}
+
+/**
+ * The 1-based column, in the source line, where the `n`th whitespace-separated
+ * token of a clause body begins (`n` counts from 0 at the body's first token).
+ *
+ * Carets inside a clause cannot be arithmetic over the parsed pieces:
+ * `bodyColumn + name.length + 1` assumes exactly one space, and the canonical
+ * form `fmt` writes aligns bodies into a column. Worse, a `measure` body is
+ * canonicalized before it is split, and canonicalization collapses runs of
+ * whitespace — so its lengths describe a string the file does not contain.
+ * Counting tokens in the source line survives both.
+ */
+function tokenColumn(line: string, bodyColumn: number, n: number): number {
+  let i = bodyColumn - 1;
+  for (let t = 0; ; t++) {
+    while (i < line.length && /\s/.test(line[i])) i++;
+    if (t === n || i >= line.length) break;
+    while (i < line.length && !/\s/.test(line[i])) i++;
+  }
+  return i + 1;
+}
+
+/** How many whitespace-separated tokens a parsed fragment covers. */
+function tokenCount(s: string): number {
+  const t = s.trim();
+  return t === "" ? 0 : t.split(/\s+/).length;
+}
+
 
 /** The suffix English gives a number: 1st, 2nd, 3rd, 4th, 11th, 21st. */
 export function ordinalSuffix(n: number): string {
@@ -575,7 +642,7 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const lineNo = i + 1;
-    const stripped = raw.replace(/(^|\s)#.*$/, "$1");
+    const stripped = stripComment(raw);
     const trimmed = stripped.trim();
     if (trimmed === "") {
       // Not noise: a comment is the author's reasoning, and `fmt` rewriting
@@ -640,7 +707,17 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
         if (m) layout.push({ kind: "clause", keyword: m[1], body: display ?? m[2].trim() });
       },
     };
-    const bodyColumn = indent + kwMatch[1].length + 2;
+    // Where the body actually starts, 1-based. Not `keyword.length + 2`: the
+    // canonical form `ratchet fmt` writes aligns clause bodies into a column,
+    // so the gap after a keyword is routinely several spaces and a caret
+    // measured from the keyword alone points at whitespace — in the one form
+    // the tool itself produces. With no body there is nothing to point at, so
+    // the caret goes just past the keyword, where the body should have been.
+    const afterKeyword = indent + kwMatch[1].length;
+    const gap = kwMatch[2] === undefined
+      ? 1
+      : (/^\s*/.exec(stripped.slice(afterKeyword)) ?? [""])[0].length;
+    const bodyColumn = afterKeyword + gap + 1;
 
     switch (keyword) {
       case "run":
@@ -703,7 +780,7 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
         const name = split[1].trim();
         const ex = parseExtractor(split[2]);
         if ("error" in ex) {
-          problem(lineNo, bodyColumn + split[1].length + 1, raw, ex.error, ex.suggestion);
+          problem(lineNo, tokenColumn(stripped, bodyColumn, tokenCount(split[1])), raw, ex.error, ex.suggestion);
           break;
         }
         if (current.measures.some((x) => x.name === name)) {
@@ -737,28 +814,43 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
           break;
         }
         const outM = /^output\s+("[\s\S]*")$/.exec(body);
-        if (outM) {
-          // `output` is also a way to measure, so a heuristic that names a
-          // measure `output` makes this clause ambiguous. Say so rather than
-          // picking one reading and hoping.
-          if (current.measures.some((x) => x.name.toLowerCase() === "output")) {
+        // `output` is also a way to measure, so the fabricated-output reading
+        // is only on offer while no measure claims that name. A clause that
+        // opens with the word and does not close the quotes is still this
+        // clause — reporting "output is not a measure" would send the author
+        // to declare one, which is not what they meant.
+        const namesOutput = current.measures.some((x) => x.name.toLowerCase() === "output");
+        if (outM || (!namesOutput && /^output(?:\s|$)/i.test(body))) {
+          // A heuristic that does measure something called `output` makes this
+          // clause ambiguous. Say so rather than picking one reading and hoping.
+          if (namesOutput) {
             problem(lineNo, bodyColumn, raw,
               `"rejects output ..." means a fabricated instrument output, but "${current.name}" also measures something called "output" -- rename the measure`);
             break;
           }
-          const text = unquoteEscaped(outM[1]);
-          if (text === undefined) {
-            problem(lineNo, bodyColumn + 7, raw, "the output after `rejects output` must be one double-quoted string");
+          const quoted = outM?.[1];
+          const text = quoted === undefined ? undefined : unquoteEscaped(quoted);
+          if (quoted === undefined || text === undefined) {
+            problem(lineNo, tokenColumn(stripped, bodyColumn, 1), raw,
+              "the output after `rejects output` must be one double-quoted string");
             break;
           }
           current.rejects.push({ kind: "output", output: text, line: lineNo, column: bodyColumn, text: body });
-          canon.push(`  rejects output ${outM[1]}`);
+          canon.push(`  rejects output ${quoted}`);
           break;
         }
         const knownNames = current.measures.map((x) => x.name);
+        // The whole body may be the measure name and nothing else. Matching
+        // only `name + " "` misses that and falls through to "not a measure
+        // (declared: <the very name>)", which contradicts itself and hides the
+        // real complaint — that no value was named.
         const rejected = [...knownNames]
           .sort((a, b) => b.length - a.length)
-          .find((name) => body.toLowerCase().startsWith(name.toLowerCase() + " "));
+          .find((name) => {
+            const lower = body.toLowerCase();
+            const n = name.toLowerCase();
+            return lower === n || (lower.startsWith(n) && /\s/.test(lower[n.length]));
+          });
         if (rejected === undefined) {
           const first = body.split(/\s+/)[0];
           problem(lineNo, bodyColumn, raw,
@@ -770,7 +862,7 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
         }
         const rawValue = body.slice(rejected.length).trim();
         if (rawValue === "") {
-          problem(lineNo, bodyColumn + rejected.length + 1, raw,
+          problem(lineNo, tokenColumn(stripped, bodyColumn, tokenCount(rejected)), raw,
             `\`rejects ${rejected}\` names no value — say what reading of ${rejected} the rules must refuse`);
           break;
         }

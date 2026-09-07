@@ -170,6 +170,93 @@ test("parse: comments and blank lines are ignored", () => {
   assert.equal(h.run, "node x.js");
 });
 
+test("parse: a `#` inside a quoted value is a character, not a comment", () => {
+  // The silent-false-pass direction. `does not contain "debug # verbose"`
+  // truncating to `does not contain "debug` is a *weaker* rule -- the value it
+  // then looks for cannot occur -- so the subject passes while the property
+  // the file names is violated. That is the one outcome this tool exists to
+  // prevent, so both directions are pinned here.
+  const lax = one(`${HEAD}  measure line the output\n  rule line does not contain "debug # verbose"\n`);
+  assert.equal(lax.rules[0].text, 'line does not contain "debug # verbose"');
+
+  // The other direction truncated into a *stricter* rule, which failed red and
+  // so got noticed. Noticed is not correct.
+  const strict = one(`${HEAD}  measure line the output\n  rule line contains "debug # verbose"\n`);
+  assert.equal(strict.rules[0].text, 'line contains "debug # verbose"');
+
+  // And the rules behave, not just their text: the lax one must refuse output
+  // that contains the value it names.
+  const seen = new Map<string, never>(Object.entries({ line: "debug # verbose tracing is ON" }) as never);
+  assert.equal(judge(lax.rules[0], seen).ok, false, "the truncated rule passed this, which is the false green");
+  assert.equal(judge(strict.rules[0], seen).ok, true, "the truncated rule failed this, which is the false red");
+});
+
+test("parse: a `#` in a quoted extractor label survives, with or without a leading space", () => {
+  // ` #tag` used to mangle into a parse error blaming the extractor phrase;
+  // `#tag` worked only because the stripper wanted whitespace before the `#`.
+  const spaced = one(`${HEAD}  measure tagged count of lines matching " #tag"\n  rule tagged is 0\n`);
+  const tight = one(`${HEAD}  measure tagged count of lines matching "#tag"\n  rule tagged is 0\n`);
+  const out = { stdout: "a #tag here\nnone\n", stderr: "", exitCode: 0 };
+  assert.equal(extract("tagged", spaced.measures[0].extractor, out).value, 1);
+  assert.equal(extract("tagged", tight.measures[0].extractor, out).value, 1);
+});
+
+test("parse: a real comment after a quoted value is still stripped", () => {
+  // The fix must not go the other way and swallow comments. The quotes here
+  // are balanced and closed, so the `#` that follows is a comment.
+  const h = one(`${HEAD}  measure n count of lines matching "release"   # only the release lines\n  rule n is 1\n`);
+  assert.equal(h.measures.length, 1);
+  assert.equal(h.rules[0].text, "n is 1");
+  assert.match(renderHeuristic(h), /count of lines matching "release"/);
+  assert.doesNotMatch(renderHeuristic(h), /only the release lines/);
+});
+
+test("parse: the caret points at the body, not into the alignment `fmt` writes", () => {
+  // `bodyColumn` was `keyword.length + 2`, which assumes one space. The
+  // canonical form aligns clause bodies into a column, so every caret in a
+  // formatted file pointed at whitespace -- in the one form the tool itself
+  // produces.
+  const r = parseHeuristics(`heuristic caret\n  run      node x.js\n  measure  v      count of lines matching "x"\n  rule     v is abov 5\n`);
+  assert.equal(r.problems.length, 1);
+  // "  rule     v is abov 5" -- `v` is the 12th column.
+  assert.equal(r.problems[0].column, 12);
+  const rendered = formatProblem("heuristics.rules", r.problems[0]);
+  const [, line, caret] = rendered.split("\n");
+  assert.equal(line[caret.indexOf("^")], "v", "the caret must land on the body it is about");
+});
+
+test("parse: a caret inside a clause counts tokens, not lengths", () => {
+  // The same defect one level down: the extractor's column was
+  // `bodyColumn + name.length + 1`, and a `measure` body is canonicalized --
+  // whitespace collapsed -- before it is split, so those lengths describe a
+  // string the file does not contain.
+  const r = parseHeuristics(`heuristic caret\n  run      node x.js\n  measure  v      count of lines mtaching "x"\n`);
+  assert.equal(r.problems.length, 1);
+  const rendered = formatProblem("heuristics.rules", r.problems[0]);
+  const [, line, caret] = rendered.split("\n");
+  assert.equal(line.slice(caret.indexOf("^"), caret.indexOf("^") + 5), "count");
+});
+
+test("`rejects <measure>` with no value says so, instead of denying the measure", () => {
+  // The name lookup wanted `name + " "`, so a body that was *only* the measure
+  // name matched nothing and fell through to "not a measure of this heuristic
+  // (declared: <that very name>)" -- a message that contradicts itself and
+  // suggests the word it just rejected.
+  const r = parseHeuristics(`${HEAD}  measure ok count of lines matching "x"\n  rule ok is 0\n  rejects  ok\n`);
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0].message, /names no value/);
+  assert.doesNotMatch(r.problems[0].message, /is not a measure/);
+});
+
+test("`rejects output` with an unquoted tail names the real complaint", () => {
+  // Only the fully-quoted form entered this branch, so an unquoted tail fell
+  // through to the measure lookup and reported "output is not a measure",
+  // sending the author to declare one. That is not what they meant.
+  const r = parseHeuristics(`${HEAD}  measure ok count of lines matching "x"\n  rule ok is 0\n  rejects output not-quoted\n`);
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0].message, /must be one double-quoted string/);
+});
+
 test("parse: every problem is reported, not just the first", () => {
   const r = parseHeuristics(`${HEAD}  measure n the exit code\n  rule n is abov 5\n  rule n is belo 3\n`);
   assert.equal(r.problems.length, 2, "an author fixing a file wants every complaint at once");
@@ -870,9 +957,10 @@ test("a declared rejection the rules refuse parses clean and is recorded", () =>
     measure: "keep",
     value: "5000000",
     line: 5,
-    // The same body column every other clause reports: the keyword's end
-    // plus one, whatever the author's alignment.
-    column: 11,
+    // Where the body actually starts. `rejects` ends at column 9 and the
+    // canonical alignment puts two spaces after it, so `keep` is at 12 — the
+    // keyword's length plus one would point into the gap.
+    column: 12,
     text: "keep 5000000",
   });
   const check = checkRejection(h, h.rejects[0]);
@@ -893,9 +981,9 @@ test("a declared rejection the rules ACCEPT is a parse error with a line and a c
   );
   assert.equal(r.problems.length, 1);
   assert.equal(r.problems[0].line, 5);
-  assert.equal(r.problems[0].column, 11);
+  assert.equal(r.problems[0].column, 12);
   assert.match(r.problems[0].message, /every rule accepts it/);
-  assert.match(formatProblem("heuristics.rules", r.problems[0]), /heuristics\.rules:5:11/);
+  assert.match(formatProblem("heuristics.rules", r.problems[0]), /heuristics\.rules:5:12/);
 });
 
 test("a rejection naming a measure with no rule about it is refused", () => {

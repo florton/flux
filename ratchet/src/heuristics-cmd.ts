@@ -12,7 +12,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { loadHeuristics, formatProblems, toSubject } from "./heuristic-config";
-import { formatHeuristics, describeExtractor, type Heuristic } from "./heuristics";
+import { formatHeuristics, describeExtractor, stripComment, type Heuristic } from "./heuristics";
 import { heuristicVersions, diffCanonical } from "./heuristic-history";
 import { ruleHash } from "./rule";
 import { validatedSubjects } from "./validate";
@@ -53,7 +53,7 @@ export function fmt(ratchetDir: string, opts: { write?: boolean } = {}): FmtResu
   const beforeLines = before.split(/\r?\n/);
   for (const h of loaded.heuristics) {
     for (const r of h.rules) {
-      const raw = (beforeLines[r.line - 1] ?? "").replace(/(^|\s)#.*$/, "$1").trim();
+      const raw = stripComment(beforeLines[r.line - 1] ?? "").trim();
       const original = raw.replace(/^rule\s+/i, "").trim();
       if (original !== "" && original !== r.text) {
         rewrites.push({ line: r.line, before: original, after: r.text });

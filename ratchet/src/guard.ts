@@ -209,17 +209,24 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
     .filter((t) => byTier(t).length > 0)
     .map((t) => `  ${byTier(t).length} ${PROOF_LABEL[t]}: ${byTier(t).join(", ")}`);
   const validated = new Set([...proofs.values()].filter((p) => p.tier !== "none").map((p) => p.subject));
+  // `rejects` is a clause in the rules file, so it is only on offer to a
+  // subject that has a block there. A subject declared in config.json has no
+  // block and cannot take that advice — and a gate that tells you to do an
+  // impossible thing is a gate you stop reading. History proof suits both, so
+  // it is always offered; the second line is named when only some can use it.
+  const unprovenProse = unproven.filter((s) => config.fromRules.has(s));
+  const advice = [`  prove one against history:   ratchet validate ${unproven[0]} --known-bad <sha> --known-good HEAD`];
+  if (unprovenProse.length > 0) {
+    const who = unprovenProse.length === unproven.length ? "" : ` for ${unprovenProse.join(", ")}`;
+    advice.push(`  or without it${who}, in the rules: rejects <measure> <a value the rules must refuse>`);
+  }
   add(
     "validation",
     unproven.length === 0,
     opts.strict ? "error" : "warning",
     (unproven.length === 0
       ? [`all ${Object.keys(config.subjects).length} subject(s) have a proof they can fail`]
-      : [
-          `${unproven.length} subject(s) have no proof they can fail: ${unproven.join(", ")}`,
-          `  prove one against history:   ratchet validate ${unproven[0]} --known-bad <sha> --known-good HEAD`,
-          `  or without it, in the rules: rejects <measure> <a value the rules must refuse>`,
-        ]
+      : [`${unproven.length} subject(s) have no proof they can fail: ${unproven.join(", ")}`, ...advice]
     ).concat(proofLines).join("\n")
   );
 
