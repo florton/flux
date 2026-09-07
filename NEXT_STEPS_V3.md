@@ -1,9 +1,13 @@
 # Ratchet — Next Steps v3
 
-> Supersedes [NEXT_STEPS_V2.md](NEXT_STEPS_V2.md) as the plan. That file
-> remains the v0.6-era record. This file is the v0.7 plan; **item 1 is built
-> and is v0.8** — what it turned up is recorded under it, and the rest of the
-> list stands. What exists is in [ratchet/README.md](ratchet/README.md).
+> **Superseded by [NEXT_STEPS_V4.md](NEXT_STEPS_V4.md)**, which is the plan.
+> This file remains the v0.7-era record and the place the coverage finding is
+> written down. Its item 1 is built and is v0.8; items 2-7 are carried into v4
+> and reordered there, because re-running the field experiments against v0.8
+> found something that outranks all of them — the capture gate refuses any
+> check that has never failed in the repository's history, which is five of
+> the eight real subjects those experiments use. What exists is in
+> [ratchet/README.md](ratchet/README.md).
 
 ## What v0.7 closed
 
