@@ -17,7 +17,7 @@
  * prints markdown works on every forge and can be piped into a file, a chat
  * webhook, or a build summary with no ceremony.
  */
-import { countOutcomes } from "./verify";
+import { countOutcomes, splitResults } from "./verify";
 import type { VerifyResult } from "./types";
 import type { ReportData } from "./report";
 import type { YieldReport } from "./yield";
@@ -32,17 +32,26 @@ export interface CommentInput {
 }
 
 export function renderComment(input: CommentInput): string {
-  const { results, report } = input;
+  const { report } = input;
+  // Rows and standing invariants answer different questions and are counted
+  // apart, so a comment never reads "12 rows pass" when four of the twelve
+  // are invariants that have no row.
+  const { rows: results, standing } = splitResults(input.results);
   const counts = countOutcomes(results);
+  const standingCounts = countOutcomes(standing);
   const failing = results.filter((r) => r.outcome === "fail");
+  const brokenStanding = standing.filter((r) => r.outcome === "fail");
   const quarantined = results.filter((r) => r.outcome === "quarantine");
 
   const verdict =
     counts.fail > 0
       ? `**${counts.fail} regression${counts.fail === 1 ? "" : "s"}** — a counterexample the corpus already holds is failing again.`
-      : quarantined.length > 0
-        ? `No regressions. **${quarantined.length} row${quarantined.length === 1 ? "" : "s"} quarantined** — a heuristic moved, so these need a decision.`
-        : `All ${counts.pass} corpus row${counts.pass === 1 ? "" : "s"} still hold.`;
+      : brokenStanding.length > 0
+        ? `**${brokenStanding.length} standing invariant${brokenStanding.length === 1 ? "" : "s"} broken** — a property that has always held here does not any more.`
+        : quarantined.length > 0
+          ? `No regressions. **${quarantined.length} row${quarantined.length === 1 ? "" : "s"} quarantined** — a heuristic moved, so these need a decision.`
+          : `All ${counts.pass} corpus row${counts.pass === 1 ? "" : "s"} still hold` +
+            (standing.length > 0 ? `, and all ${standingCounts.pass} standing invariant${standingCounts.pass === 1 ? "" : "s"} with them.` : ".");
 
   const lines: string[] = [];
   lines.push(`### ${input.title ?? "Ratchet"}`);
@@ -58,6 +67,15 @@ export function renderComment(input: CommentInput): string {
       lines.push(`| \`${r.id.slice(0, 9)}\` | ${escapeCell(r.subject)} | ${escapeCell(r.reason ?? "failed")}${drift} |`);
     }
     if (failing.length > 20) lines.push(`| … | | ${failing.length - 20} more |`);
+    lines.push("");
+  }
+
+  if (brokenStanding.length > 0) {
+    lines.push("| standing invariant | witness |");
+    lines.push("|---|---|");
+    for (const r of brokenStanding.slice(0, 20)) {
+      lines.push(`| ${escapeCell(r.subject)} | ${escapeCell(r.reason ?? "failed")} |`);
+    }
     lines.push("");
   }
 
@@ -87,10 +105,13 @@ export function renderComment(input: CommentInput): string {
     lines.push(`- all time: ${report.caughtAllTime} caught, ${report.novelAllTime} new (${report.catchRateAllTime}%)`);
   }
 
-  if (counts.na > 0 && results.length > 0 && counts.na / results.length > 0.5) {
+  const noVerdict = counts.na + counts.naEnv;
+  if (noVerdict > 0 && results.length > 0 && noVerdict / results.length > 0.5) {
     lines.push("");
     lines.push(
-      `> ⚠️ ${counts.na} of ${results.length} rows reported *not applicable* here — most of this gate is green without checking anything.`
+      `> ⚠️ ${noVerdict} of ${results.length} rows returned *no verdict* here` +
+        (counts.naEnv ? ` (${counts.na} not applicable, ${counts.naEnv} could not run)` : "") +
+        ` — most of this gate is green without checking anything.`
     );
   }
 

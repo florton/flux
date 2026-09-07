@@ -6,7 +6,7 @@ import { capture } from "./capture";
 import { verify, verifyAndExit, defaultConcurrency } from "./verify";
 import { accept, reopen, reaffirm } from "./accept";
 import { report, reportData } from "./report";
-import { bisect } from "./bisect";
+import { bisect, formatBisect } from "./bisect";
 import { replay, formatReplay } from "./replay";
 import { validate, formatValidate } from "./validate";
 import { fsck, formatFsck } from "./fsck";
@@ -22,6 +22,7 @@ import { yieldReport, formatYield } from "./yield";
 import { loadSubjects } from "./paths";
 import { loadHeuristics } from "./heuristic-config";
 import { validatedSubjects } from "./validate";
+import { subjectProofs } from "./proof";
 import { ruleHash } from "./rule";
 import { toSubject } from "./heuristic-config";
 import { RULES_TEMPLATE, CONFIG_TEMPLATE, INIT_MESSAGE } from "./templates";
@@ -49,9 +50,10 @@ function usage(): string {
   ratchet note --text "..." [--actor name]
   ratchet report                   corpus stats and churn summary
   ratchet fsck                     corpus and journal integrity check
-  ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
+  ratchet bisect <id> --from <older-ref> --to <newer-ref> [--setup "npm ci"]
+                                   names the boundary and which way it runs
   ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
-                 [--no-pinpoint]
+                 [--no-pinpoint]   every transition in the range, with its direction
   ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]
   ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
   ratchet visual record <subject> --route <url-or-route> [--viewport WxH] [--tolerance N]
@@ -59,11 +61,19 @@ function usage(): string {
                                    [--file <png>]   (use your own screenshot tool)
 
 Every command takes --home <dir> and --json. Row ids are content-addressed;
-any unambiguous prefix works. A check may exit 125 to report "not applicable
-at this commit", which is neither a pass nor a failure. A row whose owning
-rule was edited since capture is quarantined rather than treated as a
-regression: review it, then "reaffirm" (the expectation stands) or "accept"
-(it does not).
+any unambiguous prefix works.
+
+A check may exit 125 for "not applicable at this commit" (the feature did not
+exist yet) or 126 for "this environment cannot run me here" (the toolchain
+cannot prepare that commit). Neither is a pass or a failure, and they mean
+opposite things about the code under test. A row whose owning rule was edited
+since capture is quarantined rather than treated as a regression: review it,
+then "reaffirm" (the expectation stands) or "accept" (it does not).
+
+\`verify\` and \`guard\` enforce corpus rows *and* standing invariants — prose
+heuristics proven by a declared \`rejects\` clause, which enforce with no row
+behind them. The two are counted apart: the catch rate is a statement about
+counterexamples.
 `;
 }
 
@@ -103,7 +113,7 @@ interface Args {
  */
 const VALUE_FLAGS = new Set([
   "--row", "--subject", "--home", "--reason", "--actor",
-  "--good", "--bad", "--setup", "--text", "--status", "--jobs",
+  "--good", "--bad", "--from", "--to", "--setup", "--text", "--status", "--jobs",
   "--every", "--known-bad", "--known-good", "--input", "--confirm",
   "--route", "--file", "--viewport", "--tolerance", "--max-percent",
   "--wait-ms", "--out", "--command", "--stale-after", "--title",
@@ -283,6 +293,7 @@ async function main(): Promise<void> {
       const r = yieldReport(dir, config, validatedSubjects(cwd, dir, config), {
         staleAfterDays: stale ? parseInt(stale, 10) : undefined,
         fromRules: config.fromRules,
+        proofs: subjectProofs(cwd, dir, config),
       });
       emit(json, r, formatYield(r));
       break;
@@ -319,7 +330,10 @@ async function main(): Promise<void> {
       const markdown = renderComment({
         results,
         report: reportData(cwd),
-        yields: yieldReport(dir, config, validatedSubjects(cwd, dir, config), { fromRules: config.fromRules }),
+        yields: yieldReport(dir, config, validatedSubjects(cwd, dir, config), {
+          fromRules: config.fromRules,
+          proofs: subjectProofs(cwd, dir, config),
+        }),
         title: flags.get("--title"),
       });
       console.log(markdown);
@@ -347,6 +361,7 @@ async function main(): Promise<void> {
         console.log(JSON.stringify(rep, null, 2));
       } else {
         for (const id of rep.added) console.log(`+ ${id}`);
+        for (const s of rep.caught) console.log(`caught: ${s} — this row is enforcing and the bug came back anyway`);
         for (const s of rep.skipped) console.log(`skip: ${s}`);
         for (const s of rep.flaky) console.log(`flaky: ${s}`);
         for (const s of new Set(rep.unvalidated)) {
@@ -375,6 +390,7 @@ async function main(): Promise<void> {
         }
         console.log(
           `\n${rep.added.length} added, ${rep.skipped.length} skipped` +
+            (rep.caught.length ? `, ${rep.caught.length} caught by an active row` : "") +
             (rep.flaky.length ? `, ${rep.flaky.length} flaky` : "") +
             (rep.recurred.length ? `, ${rep.recurred.length} recurred` : "") +
             (rep.unvalidated.length ? `, ${rep.unvalidated.length} refused (unvalidated subject)` : "") +
@@ -481,7 +497,7 @@ async function main(): Promise<void> {
 
     case "fsck": {
       const cwd = requireRoot();
-      const result = fsck(homeDir(cwd));
+      const result = fsck(homeDir(cwd), cwd);
       emit(json, result, formatFsck(result));
       if (!result.ok) process.exit(1);
       break;
@@ -490,22 +506,22 @@ async function main(): Promise<void> {
     case "bisect": {
       const cwd = requireRoot();
       const id = positionals[0];
-      const good = flags.get("--good");
-      const bad = flags.get("--bad");
-      if (!id || !good || !bad) {
-        console.error('usage: ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]');
+      // The refs are range endpoints in history order, and `--good`/`--bad`
+      // are kept as aliases for the older and newer one. The names presumed a
+      // direction the search no longer assumes: which side passes is measured,
+      // not declared.
+      const from = flags.get("--from") ?? flags.get("--good");
+      const to = flags.get("--to") ?? flags.get("--bad");
+      if (!id || !from || !to) {
+        console.error('usage: ratchet bisect <id> --from <older-ref> --to <newer-ref> [--setup "npm ci"]');
         process.exit(1);
       }
-      if (!json) console.log(`bisecting row ${id} (good=${good}, bad=${bad})...`);
-      const result = await bisect(cwd, id, good, bad, {
+      if (!json) console.log(`bisecting row ${id} between ${from} and ${to}...`);
+      const result = await bisect(cwd, id, from, to, {
         setup: flags.get("--setup"),
         ratchetHome: homeDir(cwd),
       });
-      emit(
-        json,
-        result,
-        result.notes.map((n) => `note: ${n}`).concat(`first bad commit: ${result.firstBad}  (${result.probes} probes)`).join("\n")
-      );
+      emit(json, result, formatBisect(result, id));
       break;
     }
 

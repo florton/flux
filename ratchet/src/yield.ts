@@ -19,6 +19,7 @@
 import * as path from "path";
 import { readCorpus, foldCorpus } from "./corpus";
 import { readJournalFile } from "./journal";
+import { PROOF_LABEL, type ProofTier, type SubjectProof } from "./proof";
 import type { RatchetConfig } from "./types";
 
 export interface SubjectYield {
@@ -34,6 +35,16 @@ export interface SubjectYield {
   /** Days since the most recent capture or catch; null when there never was one. */
   quietDays: number | null;
   validated: boolean;
+  /**
+   * *How* it was proven, never merely *that* it was.
+   *
+   * "validated against history" and "validated against a declared
+   * counterexample" are different claims, and a portfolio page that collapsed
+   * them would hide exactly the thing a reviewer opens this page to find.
+   */
+  proof: ProofTier;
+  /** True when it enforces with no row behind it. */
+  standing: boolean;
 }
 
 export interface YieldReport {
@@ -57,7 +68,13 @@ export function yieldReport(
   ratchetDir: string,
   config: RatchetConfig,
   validated: Set<string>,
-  opts: { staleAfterDays?: number; now?: number; fromRules?: Set<string> } = {}
+  opts: {
+    staleAfterDays?: number;
+    now?: number;
+    fromRules?: Set<string>;
+    /** The two proof tiers. Absent means "only the historical one is known". */
+    proofs?: Map<string, SubjectProof>;
+  } = {}
 ): YieldReport {
   const staleAfterDays = opts.staleAfterDays ?? 90;
   const now = opts.now ?? Date.now();
@@ -109,6 +126,8 @@ export function yieldReport(
         lastCatch: caught,
         quietDays: daysSince(newest, now),
         validated: validated.has(name),
+        proof: opts.proofs?.get(name)?.tier ?? (validated.has(name) ? "history" : "none"),
+        standing: opts.proofs?.get(name)?.standing ?? false,
       };
     });
 
@@ -133,17 +152,22 @@ export function formatYield(r: YieldReport): string {
           : `last evidence ${s.quietDays}d ago`;
     const flags = [
       s.prose ? "prose" : "script",
-      s.validated ? "validated" : "UNVALIDATED",
-    ];
+      PROOF_LABEL[s.proof],
+      s.standing && s.rows === 0 ? "standing" : null,
+    ].filter((f): f is string => f !== null);
     lines.push(
       `  ${s.subject.padEnd(width)}  ${String(s.rows).padStart(3)} row${s.rows === 1 ? " " : "s"}` +
         ` (${s.activeRows} active)  ${age.padEnd(22)} [${flags.join(", ")}]`
     );
   }
+  const neverFiredUnproven = r.neverFired.filter((s) => s.proof === "none");
   if (r.neverFired.length > 0) {
     lines.push(
       `\n${r.neverFired.length} subject(s) have never produced a counterexample: ${r.neverFired.map((s) => s.subject).join(", ")}` +
-        `\n  That is fine for a standing invariant and a warning sign for a heuristic adopted to catch something specific.`
+        (neverFiredUnproven.length === 0
+          ? `\n  All of them declare a counterexample their rules refuse, so each is a proven standing invariant rather than an unproven one.`
+          : `\n  ${neverFiredUnproven.length} of those have no proof at all (${neverFiredUnproven.map((s) => s.subject).join(", ")}):` +
+            ` a check that has never fired and cannot say what it would refuse is indistinguishable from one that cannot fail.`)
     );
   }
   if (r.stale.length > 0) {

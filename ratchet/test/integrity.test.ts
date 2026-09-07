@@ -140,7 +140,33 @@ test("R14: exit 125 is n/a — neither a pass nor a failure", async () => {
   assert.equal(naRow!.outcome, "na");
   assert.equal(naRow!.pass, false, "n/a is not a pass");
   assert.equal(failRow!.outcome, "fail");
-  assert.deepEqual(countOutcomes(results), { pass: 0, fail: 1, na: 1, quarantine: 0 });
+  assert.deepEqual(countOutcomes(results), { pass: 0, fail: 1, na: 1, naEnv: 0, quarantine: 0 });
+});
+
+test("R14: exit 126 is `could not run here` — the other job n/a used to do", async () => {
+  // "This feature did not exist yet" and "today's toolchain cannot build that
+  // commit" mean opposite things about the commit under test. Collapsing them
+  // is how dependency rot gets reported as a regression.
+  const { home, root } = project(
+    { s: { check: QUOTED_NODE + " check.js" } },
+    'if (v === 7) { console.log("no compiler on this machine"); process.exit(126); }\nif (v === 8) fail("real failure");'
+  );
+  for (const n of [7, 8]) {
+    appendEvent(path.join(home, "corpus.jsonl"), {
+      op: "capture", id: rowId("s", n), at: "2026-01-0" + n + "T00:00:00Z",
+      subject: "s", input: n, source: "manual",
+    });
+  }
+
+  const results = await verify(root, { quiet: true, ratchetHome: home });
+  const envRow = results.find((r) => r.id === rowId("s", 7))!;
+  assert.equal(envRow.outcome, "na-env");
+  assert.equal(envRow.pass, false, "no verdict is not a pass");
+  assert.match(envRow.reason!, /no compiler on this machine/);
+  assert.deepEqual(countOutcomes(results), { pass: 0, fail: 1, na: 0, naEnv: 1, quarantine: 0 });
+
+  // And it does not fail the build on its own: only the real failure does.
+  assert.equal(results.filter((r) => r.outcome === "fail").length, 1);
 });
 
 test("R14: an n/a counterexample is not stored as evidence", async () => {

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-use-before-define */
 /**
  * Heuristics as data — the prose form of a subject.
  *
@@ -23,9 +24,22 @@
  * column, and the nearest phrase in the vocabulary. A rewrite is never guessed.
  */
 
+// Syntax reaching for semantics, on purpose: a declared rejection is checked
+// by *evaluating* it, and the evaluator is the same one that judges a real
+// run. The reverse edge — evaluate.ts naming these types — is `import type`
+// and erases at compile time, so this is not a cycle.
+import { checkRejection, describePredicate } from "./evaluate";
+
 /** How a named quantity is read out of the instrument's output. */
 export type Extractor =
-  | { kind: "number-after"; label: string }
+  /**
+   * `occurrence` selects *which* appearance of the label to read from, 1-based
+   * and omitted when it is the first. An extractor anchored to a label used to
+   * take the first match with no way to say otherwise, so a subject whose
+   * natural reading is "the second `Win percent:`" had to be rewritten around
+   * the instrument instead of describing it.
+   */
+  | { kind: "number-after"; label: string; occurrence?: number }
   | { kind: "json-field"; path: string }
   | { kind: "line-count"; substring: string }
   | { kind: "exit-code" }
@@ -46,7 +60,16 @@ export type Predicate =
   | { kind: "ends-with"; value: string }
   | { kind: "empty"; negated: boolean }
   | { kind: "is-a-number" }
-  | { kind: "same-as"; measure: string };
+  | { kind: "same-as"; measure: string }
+  /**
+   * An ordering between two readings of the same run. `is the same as` was
+   * the only relation the vocabulary had, so "change is above keep" — the
+   * natural statement of a Monty Hall check — could only be written as
+   * equality, which is false, or worked around by banding raw counts against
+   * the instrument's own iteration count, which couples a true rule to a
+   * number that is free to change.
+   */
+  | { kind: "compare"; op: "above" | "below" | "at-least" | "at-most"; measure: string };
 
 export interface Measure {
   name: string;
@@ -62,6 +85,31 @@ export interface Rule {
   line: number;
 }
 
+/**
+ * A reading the author declares this heuristic must refuse — the second way
+ * to prove a check can fail.
+ *
+ * Since the rules are pure predicates over named measures, they can be
+ * evaluated against a hypothetical reading with no process, no git and no
+ * clock. That makes a declared rejection nearly free, and it is *checked*:
+ * if every rule accepts the reading, the declaration is a parse error naming
+ * the line, exactly as a clause that does not parse is.
+ *
+ * What it establishes: the rule discriminates. What it does not, and what
+ * history does: that the check catches a mistake a human actually made. The
+ * two proofs are ordered, not equivalent, and both stay visible — see
+ * `proof.ts`.
+ */
+export type Rejection =
+  /** A single named reading, judged by the rules that read that measure alone. */
+  | { kind: "reading"; measure: string; value: string; line: number; column: number; text: string }
+  /**
+   * A fabricated instrument output, run through the whole pipeline —
+   * extraction and judgment both. More general and more verbose; the
+   * measure-and-value form is the cheap default.
+   */
+  | { kind: "output"; output: string; line: number; column: number; text: string };
+
 export interface Heuristic {
   name: string;
   /** The command that produces the observation. */
@@ -73,14 +121,26 @@ export interface Heuristic {
   owns: string[];
   measures: Measure[];
   rules: Rule[];
+  /** Readings this heuristic declares it refuses. Checked at parse time. */
+  rejects: Rejection[];
   /** Unchecked prose. Counted separately and never mistaken for a guarantee. */
   notes: string[];
   /** Why this heuristic exists — carried into failure output and the journal. */
   because?: string;
   /** Paths whose absence makes this heuristic not-applicable (exit 125). */
   appliesWhenExists: string[];
+  /**
+   * Paths whose absence means the *environment* cannot run this here — the
+   * other job `na` used to do (exit 126).
+   *
+   * "The feature did not exist at this commit" and "today's toolchain cannot
+   * prepare that commit" mean opposite things about the code under test, and
+   * the vocabulary offered only the first. Every scripted instrument grew its
+   * own three-way split by hand as a result.
+   */
+  needsExists: string[];
   line: number;
-  /** Canonical source of this block, for hashing and for diffing an edit. */
+  /** Canonical source of this block, for display and for diffing an edit. */
   canonical: string;
   /**
    * Comment and blank lines that introduce this block, verbatim.
@@ -214,13 +274,39 @@ export function canonicalizeClause(body: string): string {
   return s.replace(SENTINEL_RE, (_, i) => literals[Number(i)]);
 }
 
+/**
+ * Ordinal words, for the nth-match extractor. Scoped to `measure` clauses
+ * rather than folded into the general synonym table: `rule status is second`
+ * is an equality against the string "second", and a table that rewrote it to
+ * "2nd" would silently change what that rule compares.
+ */
+const ORDINAL_WORDS: [RegExp, string][] = [
+  [/\bfirst\b/g, "1st"], [/\bsecond\b/g, "2nd"], [/\bthird\b/g, "3rd"],
+  [/\bfourth\b/g, "4th"], [/\bfifth\b/g, "5th"], [/\bsixth\b/g, "6th"],
+  [/\bseventh\b/g, "7th"], [/\beighth\b/g, "8th"], [/\bninth\b/g, "9th"],
+  [/\btenth\b/g, "10th"],
+];
+
+/** Snap a `measure` clause body to canonical form. */
+export function canonicalizeMeasure(body: string): string {
+  const literals: string[] = [];
+  let s = body.replace(/"[^"]*"/g, (m) => {
+    literals.push(m);
+    return `${SENTINEL}${literals.length - 1}${SENTINEL}`;
+  });
+  for (const [re, to] of ORDINAL_WORDS) s = s.replace(re, to);
+  // "the 2nd number after" reads naturally and so does "2nd number after".
+  s = s.replace(SENTINEL_RE, (_, i) => literals[Number(i)]);
+  return canonicalizeClause(s);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Vocabulary, for suggestions                                                 */
 /* -------------------------------------------------------------------------- */
 
 export const KEYWORDS = [
   "heuristic", "run", "shell", "seed", "timeout", "owns",
-  "measure", "rule", "note", "because", "applies",
+  "measure", "rule", "rejects", "note", "because", "applies", "needs",
 ];
 
 export const PREDICATE_PHRASES = [
@@ -232,6 +318,7 @@ export const PREDICATE_PHRASES = [
 
 export const EXTRACTOR_PHRASES = [
   'number after "LABEL"',
+  'Nth number after "LABEL"',
   "json field PATH",
   'count of lines matching "TEXT"',
   "exit code",
@@ -275,6 +362,30 @@ function unquote(s: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
+/**
+ * A quoted literal that may carry escapes, for `rejects output "..."`.
+ *
+ * The clause grammar is one line per clause and a fabricated instrument
+ * output is usually several, so a backslash escape has to mean something
+ * here — unlike in an extractor's label, where a literal newline cannot
+ * occur and a backslash is just a character in a Windows path.
+ */
+export function unquoteEscaped(s: string): string | undefined {
+  const m = /^"((?:[^"\\]|\\.)*)"$/.exec(s.trim());
+  if (!m) return undefined;
+  return m[1].replace(/\\(.)/g, (_, c: string) =>
+    c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "\r" : c
+  );
+}
+
+
+/** The suffix English gives a number: 1st, 2nd, 3rd, 4th, 11th, 21st. */
+export function ordinalSuffix(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return "th";
+  return ["th", "st", "nd", "rd"][n % 10] ?? "th";
+}
+
 function parseNumber(s: string): number | undefined {
   const t = s.trim().replace(/%$/, "");
   if (!/^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(t)) return undefined;
@@ -287,11 +398,20 @@ export function parseExtractor(text: string): Extractor | { error: string; sugge
   const s = text.trim();
   let m: RegExpExecArray | null;
 
-  if ((m = /^number after\s+(".*")$/.exec(s))) {
-    const label = unquote(m[1]);
+  // The ordinal prefix is optional and its suffix is not checked for
+  // agreement: `fmt` rewrites "2st" to "2nd" rather than refusing it, which
+  // is the same courtesy the synonym table extends to loose wording.
+  if ((m = /^(?:(\d+)(?:st|nd|rd|th)\s+)?number after\s+(".*")$/.exec(s))) {
+    const occurrence = m[1] === undefined ? 1 : Number(m[1]);
+    if (!Number.isInteger(occurrence) || occurrence < 1) {
+      return { error: `\`${m[1]}\` is not a match to count to — the first match is 1st` };
+    }
+    const label = unquote(m[2]);
     if (label === undefined) return { error: "the label after `number after` must be in double quotes" };
     if (label === "") return { error: "the label after `number after` is empty, so it would match anywhere" };
-    return { kind: "number-after", label };
+    return occurrence === 1
+      ? { kind: "number-after", label }
+      : { kind: "number-after", label, occurrence };
   }
   if ((m = /^json field\s+(\S+)$/.exec(s))) {
     return { kind: "json-field", path: m[1].replace(/^\.+|\.+$/g, "") };
@@ -333,7 +453,7 @@ export function parseRule(
     };
   }
   const rest = s.slice(measure.length).trim();
-  const predicate = parsePredicate(rest);
+  const predicate = parsePredicate(rest, known);
   if ("error" in predicate) return predicate;
   return { measure, predicate };
 }
@@ -341,7 +461,14 @@ export function parseRule(
 /** Leading words of every comparison phrase, for near-miss detection. */
 const COMPARATOR_WORDS = ["above", "below", "between", "within", "at least", "at most", "one of", "empty", "a number", "the same as", "not"];
 
-function parsePredicate(rest: string): Predicate | { error: string; suggestion?: string } {
+/** The declared measure this text names, if any. Longest name wins. */
+function measureNamed(text: string, known: string[]): string | undefined {
+  const t = text.trim();
+  return [...known].sort((a, b) => b.length - a.length)
+    .find((name) => name.toLowerCase() === t.toLowerCase());
+}
+
+function parsePredicate(rest: string, known: string[] = []): Predicate | { error: string; suggestion?: string } {
   let m: RegExpExecArray | null;
 
   if ((m = /^is between\s+(\S+)\s+and\s+(\S+)$/.exec(rest))) {
@@ -367,12 +494,19 @@ function parsePredicate(rest: string): Predicate | { error: string; suggestion?:
     ["is at least", "at-least"],
     ["is at most", "at-most"],
   ] as const) {
-    if (rest.toLowerCase().startsWith(phrase + " ")) {
-      const raw = rest.slice(phrase.length).trim();
-      const n = parseNumber(raw);
-      if (n === undefined) return { error: `\`${phrase}\` needs a number, got "${raw}"` };
-      return { kind, n } as Predicate;
-    }
+    if (!rest.toLowerCase().startsWith(phrase + " ")) continue;
+    const raw = rest.slice(phrase.length).trim();
+    const n = parseNumber(raw);
+    if (n !== undefined) return { kind, n } as Predicate;
+    // The same comparison, against another reading of the same run. A band
+    // against a constant and an ordering between two measures are both things
+    // people want to say, and until now only the first could be said.
+    const other = measureNamed(raw, known);
+    if (other !== undefined) return { kind: "compare", op: kind, measure: other };
+    return {
+      error: `\`${phrase}\` needs a number or another measure, got "${raw}"`,
+      suggestion: nearest(raw, known),
+    };
   }
   if ((m = /^is one of\s+(.+)$/i.exec(rest))) {
     const values = m[1].split(",").map((v) => (unquote(v) ?? v).trim()).filter((v) => v !== "");
@@ -471,8 +605,8 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
         continue;
       }
       current = {
-        name: body, shell: false, owns: [], measures: [], rules: [], notes: [],
-        appliesWhenExists: [], line: lineNo, canonical: "",
+        name: body, shell: false, owns: [], measures: [], rules: [], rejects: [], notes: [],
+        appliesWhenExists: [], needsExists: [], line: lineNo, canonical: "",
         leading: trimLeadingBlanks(pending), layout: [],
       };
       pending = [];
@@ -553,10 +687,10 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
         break;
 
       case "measure": {
-        if (canonicalizeFirst) body = canonicalizeClause(body);
+        if (canonicalizeFirst) body = canonicalizeMeasure(body);
         // `measure NAME is EXTRACTOR` and `measure NAME EXTRACTOR` both read
         // naturally; the copula is optional and carries no meaning.
-        const split = /^(\S+(?:\s+\S+)*?)\s+(?:is\s+)?(number after\b[\s\S]*|json field\b[\s\S]*|count of lines\b[\s\S]*|exit code$|output$)/.exec(body);
+        const split = /^(\S+(?:\s+\S+)*?)\s+(?:is\s+)?(\d+(?:st|nd|rd|th)\s+number after\b[\s\S]*|number after\b[\s\S]*|json field\b[\s\S]*|count of lines\b[\s\S]*|exit code$|output$)/.exec(body);
         if (!split) {
           const parsedNoName = parseExtractor(body);
           problem(lineNo, bodyColumn, raw,
@@ -593,6 +727,65 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
         break;
       }
 
+      case "rejects": {
+        // Deliberately not canonicalized: the right-hand side is a *value*,
+        // and running the synonym table over it would rewrite the very reading
+        // the author is claiming the rules refuse.
+        if (!body) {
+          problem(lineNo, bodyColumn, raw,
+            "`rejects` reads: rejects <measure> <a value the rules must refuse>, or rejects output \"...\"");
+          break;
+        }
+        const outM = /^output\s+("[\s\S]*")$/.exec(body);
+        if (outM) {
+          // `output` is also a way to measure, so a heuristic that names a
+          // measure `output` makes this clause ambiguous. Say so rather than
+          // picking one reading and hoping.
+          if (current.measures.some((x) => x.name.toLowerCase() === "output")) {
+            problem(lineNo, bodyColumn, raw,
+              `"rejects output ..." means a fabricated instrument output, but "${current.name}" also measures something called "output" -- rename the measure`);
+            break;
+          }
+          const text = unquoteEscaped(outM[1]);
+          if (text === undefined) {
+            problem(lineNo, bodyColumn + 7, raw, "the output after `rejects output` must be one double-quoted string");
+            break;
+          }
+          current.rejects.push({ kind: "output", output: text, line: lineNo, column: bodyColumn, text: body });
+          canon.push(`  rejects output ${outM[1]}`);
+          break;
+        }
+        const knownNames = current.measures.map((x) => x.name);
+        const rejected = [...knownNames]
+          .sort((a, b) => b.length - a.length)
+          .find((name) => body.toLowerCase().startsWith(name.toLowerCase() + " "));
+        if (rejected === undefined) {
+          const first = body.split(/\s+/)[0];
+          problem(lineNo, bodyColumn, raw,
+            knownNames.length
+              ? `"${first}" is not a measure of this heuristic (declared: ${knownNames.join(", ")})`
+              : `\`rejects\` names a measure and a value, and this heuristic declares no measure yet`,
+            nearest(first, knownNames));
+          break;
+        }
+        const rawValue = body.slice(rejected.length).trim();
+        if (rawValue === "") {
+          problem(lineNo, bodyColumn + rejected.length + 1, raw,
+            `\`rejects ${rejected}\` names no value — say what reading of ${rejected} the rules must refuse`);
+          break;
+        }
+        current.rejects.push({
+          kind: "reading",
+          measure: rejected,
+          value: unquote(rawValue) ?? rawValue,
+          line: lineNo,
+          column: bodyColumn,
+          text: `${rejected} ${rawValue}`,
+        });
+        canon.push(`  rejects ${rejected} ${rawValue}`);
+        break;
+      }
+
       case "note":
         if (!body) { problem(lineNo, bodyColumn, raw, "`note` needs some text"); break; }
         current.notes.push(body);
@@ -604,6 +797,20 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
         current.because = current.because ? `${current.because} ${body}` : body;
         canon.push(`  because ${body}`);
         break;
+
+      case "needs": {
+        const m = /^(.+?)\s+(?:to\s+)?exists?$/i.exec(body);
+        if (!m) {
+          problem(lineNo, bodyColumn, raw,
+            "`needs` reads: needs <path> exists — it makes the heuristic report \"could not run here\" where that path is absent, " +
+              "which is different from `applies when <path> exists` (\"this did not exist yet\") and from a failure");
+          break;
+        }
+        const p = (unquote(m[1]) ?? m[1]).trim();
+        current.needsExists.push(p);
+        canon.push(`  needs ${p} exists`);
+        break;
+      }
 
       case "applies": {
         const m = /^when\s+(.+?)\s+exists$/i.exec(body);
@@ -658,14 +865,32 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
     for (const r of h.rules) {
       // A relational rule naming a measure that does not exist would sit in
       // the file looking like a guarantee while comparing against nothing.
-      if (r.predicate.kind !== "same-as") continue;
-      const other = r.predicate.measure;
-      if (h.measures.some((x) => x.name === other)) continue;
+      const other = r.predicate.kind === "same-as" || r.predicate.kind === "compare" ? r.predicate.measure : undefined;
+      if (other === undefined || h.measures.some((x) => x.name === other)) continue;
       problems.push({
         line: r.line, column: 1, text: r.text,
-        message: `\`is the same as ${other}\` names something "${h.name}" does not measure`,
+        message: `\`${describePredicate(r.predicate)}\` names something "${h.name}" does not measure`,
         suggestion: nearest(other, h.measures.map((x) => x.name)),
       });
+    }
+
+    // The declared rejections, checked. A proof that does not prove anything
+    // is caught here, the same way a clause that does not parse is: with a
+    // line, a column, and the reason in the author's own terms.
+    //
+    // Skipped when a rule in this block already failed to parse — the rules
+    // the rejection would be judged against are not all present, so the
+    // complaint would be about a consequence rather than about the cause.
+    if (!ruleLineFailed) {
+      for (const r of h.rejects) {
+        const check = checkRejection(h, r);
+        if (check.ok) continue;
+        problems.push({
+          line: r.line, column: r.column,
+          text: source.split(/\r?\n/)[r.line - 1] ?? `rejects ${r.text}`,
+          message: check.problem!,
+        });
+      }
     }
   }
 
@@ -686,7 +911,11 @@ function trimTrailingBlanks(lines: string[]): string[] {
 
 export function describeExtractor(e: Extractor): string {
   switch (e.kind) {
-    case "number-after": return `number after "${e.label}"`;
+    case "number-after": {
+      const n = e.occurrence ?? 1;
+      const which = n === 1 ? "" : `${n}${ordinalSuffix(n)} `;
+      return `${which}number after "${e.label}"`;
+    }
     case "json-field": return `json field ${e.path}`;
     case "line-count": return `count of lines matching "${e.substring}"`;
     case "exit-code": return "exit code";

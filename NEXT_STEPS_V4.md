@@ -5,6 +5,52 @@
 > down; its item 1 is built and is v0.8. This file is the v0.9 plan. What
 > exists is in [ratchet/README.md](ratchet/README.md).
 
+> **Status, 2026-09-07 — items 1, 2, 3, 4 and 5 are built; this is v0.9.**
+> 8,328 lines of `src`, 193 tests. What exists is in
+> [ratchet/README.md](ratchet/README.md). The five closed items are marked
+> **BUILT** in place below, with what was actually implemented; items 6–9 and
+> the residue of item 4 are the remaining plan.
+>
+> | Item | Built | Where |
+> |---|---|---|
+> | 1a. Proof without history | `rejects <measure> <value>` and `rejects output "..."`, checked at parse time | `heuristics.ts`, `evaluate.ts` |
+> | 1b. A home for the standing invariant | subjects proven that way enforce with no row; `verify` runs rows ∪ standing; two proof tiers, never a bare "validated" | `proof.ts`, `verify.ts`, `guard.ts`, `yield.ts` |
+> | 2. Direction, and more than one | `replay` reports every transition with its direction; `bisect` takes `--from`/`--to` and names the boundary either way | `replay.ts`, `bisect.ts` |
+> | 3a. Zero rows is green and silent | `verify` and `guard` say when a repository declares subjects and has armed none | `verify.ts`, `guard.ts` |
+> | 3b. An instrument inside the measured tree | `fsck` and `guard` warn, naming the subject and the one-line fix | `instrument.ts` |
+> | 4. The nth match, and comparing two measures | `the 2nd number after "L"`; `is above/below/at least/at most <measure>` | `heuristics.ts`, `evaluate.ts` |
+> | 5. `na` is doing two jobs | exit 126 / `needs <path> exists` = "this environment cannot run me here", distinct from `na` | `types.ts`, `probe.ts`, `runner.ts` |
+> | 6. The catch rate undercounts | *partly*: an active row re-failing at `capture` is now journaled as a catch and reaches the numerator | `capture.ts` |
+>
+> **What item 6 still leaves open.** The decision taken was "journal it, but at
+> `capture`, not at the gate": `capture` is an explicit act against a named
+> artifact, so writing there is expected, whereas a gate that appended to a
+> committed file on every build would dirty the working tree inside a
+> pre-commit hook. That closes the common path — a red CI run fed to `capture`
+> whose failing input is a row that is still enforcing — and it leaves the
+> other one open: a row that goes red under `ratchet verify` and is fixed
+> without anyone pointing `capture` at it is still not counted.
+>
+> **What item 4 still leaves open**, unchanged: a baseline that moves, repeated
+> structure (`for each`), and two-sided readings across two runs.
+>
+> **Two findings this work produced, both by execution.** The `test-suite`
+> heuristic had sat in `heuristics.rules` for three versions listed
+> `UNVALIDATED` and enforcing nothing — it is the standing invariant item 1
+> describes, in this repository — and the moment its `rejects` lines made it
+> enforce it went red on a real failing suite. Later, once green, it caught a
+> second defect: two new tests spawned the probe with `RATCHET_PROJECT_ROOT`
+> inherited from the outer probe, so they passed alone and failed when the
+> suite ran as a heuristic's own instrument.
+>
+> **And one new uniformity invariant**, `proof-tiers-reach-every-report`, for a
+> bug this session shipped and then caught: `ratchet yield` reported a
+> subject as validated against history while `ratchet guard`, in the same run,
+> reported it as validated against a declared counterexample — because
+> `yieldReport` takes the tiers as an option and one call site omitted it. That
+> is the partial-application shape the scanner exists for, and it is now the
+> sixth invariant.
+
 ## What v0.8 closed
 
 One item from v3, the one that outranked the rest: **cover the class where the
@@ -93,7 +139,7 @@ is pointed at.
 
 ## Next pieces, in priority order
 
-### 1. Proof without history, and a home for the standing invariant
+### 1. Proof without history, and a home for the standing invariant — **BUILT**
 
 Two changes, and the second is the one that makes the first useful. Together
 they retire "prove it failed on a past bug" as the sole gate — it stays as the
@@ -174,7 +220,7 @@ and `ratchet yield` distinguishes their proof from `basic-edge`'s. A rule
 whose declared rejection is accepted by the rule is a parse-time error with a
 line and a column.
 
-### 2. A transition has a direction, and a range can hold more than one
+### 2. A transition has a direction, and a range can hold more than one — **BUILT**
 
 Experiment 4's headline result in v0 was that even-stride sampling plus
 halving pinpoints the commit where the galaxy gained its arms, for 36% of the
@@ -219,7 +265,7 @@ continue to be skipped over rather than treated as either side of a boundary.
 galaxy-structure` on particles names `9f53b4d` as a fix with no hand-probing,
 and a synthetic range containing a break and a later fix reports both.
 
-### 3. "Green over nothing" has two more shapes, and both are detectable
+### 3. "Green over nothing" has two more shapes, and both are detectable — **BUILT**
 
 `verify` already says when most of the gate reported `na` — *"most of this gate
 is not checking anything here"* — because a gate that is green while checking
@@ -263,7 +309,7 @@ inside the measured tree and does not go through a token should say so — in
 and does not warn on `node {home}/tools/check.js`; `verify` and `guard` say
 when a repository declares subjects and has no armed rows at all.
 
-### 4. The measure vocabulary, with the gaps now named by name
+### 4. The measure vocabulary, with the gaps now named by name — **BUILT** (the two named gaps; three remain)
 
 Carried from v3 item 2, and no longer hypothetical — the odds re-run produced
 two concrete failures to express, in the *only* subject of the four that did
@@ -295,7 +341,7 @@ Still outstanding from v3, unchanged and still real:
 percent:` readings and `change is above keep`, with no dependence on the
 iteration count.
 
-### 5. `na` is still doing two jobs
+### 5. `na` is still doing two jobs — **BUILT**
 
 Unchanged from v3 item 3. `applies when <path> exists` covers "this feature did
 not exist yet"; it does not cover "the instrument cannot run here", which
@@ -308,7 +354,7 @@ instrument that could not compile, `report` for a real measurement — because
 the vocabulary offers only the first. Every scripted instrument re-invents
 that distinction; it belongs in the tool.
 
-### 6. The catch rate still undercounts
+### 6. The catch rate still undercounts — **PARTLY BUILT**
 
 Unchanged from v3 item 4, and now with an extra reason to care: `ratchet
 report` on this repository reads `all-time: 0 caught, 8 new (0%)`, and will
@@ -391,15 +437,19 @@ dependencies are simply there.
 
 ## Limitations to keep disclosed
 
-- **A check that has never failed cannot be armed** (item 1). Five of eight
-  field subjects. Until that is fixed, the honest description of the tool is
-  "regression memory for bugs you have already had", not "a gate".
-- **`replay` and `bisect` only find regressions**, not fixes (item 2).
-- **The catch rate undercounts** (item 6); `report` reads 0% and will continue
-  to.
-- **A green gate can still be checking nothing** (item 3): zero armed rows
-  passes silently, and an instrument living inside the measured tree is
-  correct at HEAD and wrong across history.
+- ~~**A check that has never failed cannot be armed** (item 1).~~ Closed in
+  v0.9: a declared rejection is the second tier of proof, and a heuristic
+  proven that way enforces as a standing invariant.
+- ~~**`replay` and `bisect` only find regressions**, not fixes (item 2).~~
+  Closed in v0.9.
+- **The catch rate still undercounts** (item 6), though less: a red run fed to
+  `capture` whose failing input matches an *active* row now counts. A row that
+  goes red under `verify` and is fixed without anyone running `capture` still
+  does not.
+- ~~**A green gate can still be checking nothing** (item 3).~~ Both shapes are
+  reported in v0.9. The residue is the one no mechanism can see: a rule can
+  discriminate perfectly and an extractor can read a real number out of a run
+  that set nothing up.
 - **The self-host corpus covers four classes, not five.** Packaging and
   hygiene — R16, R19, R21 — still have no rows, and unlike the three classes
   v0.8 covered, this one has no obvious instrument: "the published package

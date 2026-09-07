@@ -1,7 +1,7 @@
 import { spawn, spawnSync, SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { NA_EXIT_CODE, type CheckOutcome } from "./types";
+import { NA_ENV_EXIT_CODE, NA_EXIT_CODE, type CheckOutcome } from "./types";
 import { substituteArgv, substituteShell } from "./substitution";
 
 export interface RunOptions {
@@ -182,6 +182,15 @@ function interpret(status: number | null, signal: string | null, stdout: string,
   }
   const out = stdout.trim();
   const err = stderr.trim();
+  if (status === NA_ENV_EXIT_CODE) {
+    return {
+      outcome: "na-env",
+      pass: false,
+      reason: out || err || "this environment cannot run the check here",
+      code: status,
+      errored: false,
+    };
+  }
   if (status === NA_EXIT_CODE) {
     return { outcome: "na", pass: false, reason: out || err || "not applicable at this commit", code: status, errored: false };
   }

@@ -44,7 +44,7 @@ export interface AdoptProbe {
   sha: string;
   shortSha: string;
   message: string;
-  outcome: "pass" | "fail" | "na";
+  outcome: "pass" | "fail" | "na" | "na-env";
   reason: string;
 }
 
@@ -93,7 +93,7 @@ export async function adopt(cwd: string, subject: string, opts: AdoptOptions): P
         if (s.outcome !== "pass") {
           // Dependency rot, not a regression: an old tree today's toolchain
           // can no longer build says nothing about that commit's behavior.
-          return { sha: commit.sha, shortSha: commit.sha.slice(0, 8), message: commit.subject, outcome: "na", reason: `setup failed: ${s.reason}` };
+          return { sha: commit.sha, shortSha: commit.sha.slice(0, 8), message: commit.subject, outcome: "na-env", reason: `setup failed: ${s.reason}` };
         }
       }
       const r = await runCheckAsync(subj.check, null, {
@@ -259,7 +259,7 @@ function firstLine(reason: string): string {
 export function formatAdopt(r: AdoptResult): string {
   const lines: string[] = [`subject: ${r.subject}  (rule ${r.ruleHash})`];
   for (const p of r.probes) {
-    const mark = p.outcome === "pass" ? "✓" : p.outcome === "fail" ? "✗" : "−";
+    const mark = p.outcome === "pass" ? "✓" : p.outcome === "fail" ? "✗" : p.outcome === "na-env" ? "∅" : "−";
     lines.push(`  ${mark} ${p.shortSha}  ${p.message.slice(0, 48).padEnd(48)} ${p.outcome === "pass" ? "" : firstLine(p.reason)}`);
   }
   lines.push("");

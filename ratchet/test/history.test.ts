@@ -12,7 +12,7 @@ import { capture } from "../src/capture";
 import { proveSubjects } from "./proof";
 import { verify } from "../src/verify";
 import { accept, reaffirm } from "../src/accept";
-import { replay, sample, parsePolicy } from "../src/replay";
+import { replay, sample, parsePolicy, formatReplay } from "../src/replay";
 import { validate, validatedSubjects } from "../src/validate";
 import { adopt } from "../src/adopt";
 import { commitRange, type CommitInfo } from "../src/worktree";
@@ -304,8 +304,9 @@ test("replay samples history and halves to the introducing commit", async () => 
 
   assert.ok(r.sampled < r.total, `sampled ${r.sampled} of ${r.total}`);
   assert.ok(r.environment.node.startsWith("v"), "the run records the environment it happened under");
-  assert.ok(r.pinpoint, "a pass -> fail transition must be pinpointed");
-  assert.equal(r.pinpoint!.firstBad.subject, "c3 BREAKS", "halving names the commit that introduced it");
+  const broke = r.transitions.find((t) => t.kind === "broke");
+  assert.ok(broke, "a pass -> fail transition must be found");
+  assert.equal(broke!.commit.subject, "c3 BREAKS", "halving names the commit that introduced it");
 
   // The user's checkout is untouched throughout.
   assert.equal(
@@ -462,8 +463,63 @@ test("{home} lets the instrument live outside the tree it measures", async () =>
   assert.equal(byCommit.get("c1"), "pass");
   assert.equal(byCommit.get("c3 BREAKS"), "fail", "the carried probe runs at a commit that never contained it");
   assert.equal(byCommit.get("c7 fixes"), "pass");
-  assert.ok(r.pinpoint, "a transition is still pinpointed in subject mode");
-  assert.equal(r.pinpoint!.firstBad.subject, "c3 BREAKS");
+  // The fixture breaks at c3 and fixes at c7, so this range holds *both*
+  // boundaries. Reporting only the first — labelled "first bad commit"
+  // whichever it was — is what made a fix invisible.
+  assert.deepEqual(
+    r.transitions.map((t) => [t.kind, t.commit.subject]),
+    [["broke", "c3 BREAKS"], ["fixed", "c7 fixes"]],
+    "every transition is reported, in history order, with its direction"
+  );
+});
+
+test("replay names a fix, in a range that holds only a fix", async () => {
+  // The headline result the v0 experiment recorded — the commit where a
+  // galaxy *gained* its arms — did not reproduce: `replay` searched for a
+  // pass -> fail pair and halved that window only, so a fail -> pass boundary
+  // reported "no transition inside this range" and had to be closed by hand.
+  const { dir, log } = seedHistory();
+  appendEvent(path.join(dir, ".ratchet", "corpus.jsonl"), {
+    op: "capture",
+    id: rowId("doubling", 21),
+    at: "2026-02-01T00:00:00Z",
+    subject: "doubling",
+    input: 21,
+    source: "manual",
+  });
+
+  // c4..HEAD starts inside the broken era, so the only boundary is the fix.
+  const r = await replay(dir, {
+    good: log[4].sha,
+    bad: "HEAD",
+    ratchetHome: path.join(dir, ".ratchet"),
+  });
+  assert.deepEqual(
+    r.transitions.map((t) => [t.kind, t.commit.subject]),
+    [["fixed", "c7 fixes"]]
+  );
+  assert.match(formatReplay(r), /fixed  at .* fail -> pass/);
+});
+
+test("replay says so plainly when a range holds no transition at all", async () => {
+  const { dir, log } = seedHistory();
+  appendEvent(path.join(dir, ".ratchet", "corpus.jsonl"), {
+    op: "capture",
+    id: rowId("doubling", 21),
+    at: "2026-02-01T00:00:00Z",
+    subject: "doubling",
+    input: 21,
+    source: "manual",
+  });
+  // log[i] is c(i+1): the range good..bad excludes its start. c3..c6 is
+  // entirely inside the broken era, so there is no boundary to find.
+  const r = await replay(dir, {
+    good: log[2].sha,
+    bad: log[5].sha,
+    ratchetHome: path.join(dir, ".ratchet"),
+  });
+  assert.deepEqual(r.transitions, []);
+  assert.match(formatReplay(r), /no transition inside this range . every usable sample fails/);
 });
 
 test("a check reads RATCHET_HOME and RATCHET_TEST from the environment", () => {

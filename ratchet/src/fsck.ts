@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import { foldCorpus, isLegacyId, readCorpus, rowId, stableStringify } from "./corpus";
 import { readJournalFile } from "./journal";
 import { loadSubjects } from "./paths";
+import { instrumentsInsideTree } from "./instrument";
 import type { CorpusEvent, LineProblem, RatchetConfig } from "./types";
 
 export interface FsckFinding {
@@ -14,6 +15,7 @@ export interface FsckFinding {
     | "id-mismatch"
     | "legacy-id"
     | "unconfigured-subject"
+    | "instrument-inside-tree"
     | "visual-baseline-missing"
     | "visual-baseline-hash-mismatch";
   severity: "error" | "warning" | "info";
@@ -36,7 +38,7 @@ export interface FsckReport {
  * verified that way and are reported as info, because they also will not
  * dedup against new captures of the same counterexample.
  */
-export function fsck(ratchetDir: string): FsckReport {
+export function fsck(ratchetDir: string, projectRoot?: string): FsckReport {
   const findings: FsckFinding[] = [];
   const corpusPath = path.join(ratchetDir, "corpus.jsonl");
   const journalPath = path.join(ratchetDir, "journal.jsonl");
@@ -95,6 +97,14 @@ export function fsck(ratchetDir: string): FsckReport {
           "warning",
           `"${name}" is declared both in config.json and in heuristics.rules — config.json wins; delete one`
         );
+      }
+
+      // A check whose instrument lives inside the tree it measures is correct
+      // at HEAD and wrong across history — the quietest of the three shapes of
+      // "green over nothing", because at HEAD it looks like everything works.
+      const root = projectRoot ?? path.dirname(ratchetDir);
+      for (const f of instrumentsInsideTree(root, config)) {
+        push("instrument-inside-tree", "warning", `${f.detail}. Fix: ${f.fix}`);
       }
     } catch (err) {
       push("corpus-unreadable-line", "error", err instanceof Error ? err.message : String(err));

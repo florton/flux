@@ -8,6 +8,10 @@ import { guard, formatGuard } from "../src/guard";
 import { foldRows, readEvents, rowId } from "../src/corpus";
 import { readJournal } from "../src/journal";
 import { proveSubjects } from "./proof";
+import { verify, emptyGateWarning } from "../src/verify";
+import { subjectProofs, PROOF_LABEL } from "../src/proof";
+import { instrumentPath } from "../src/instrument";
+import { loadSubjects } from "../src/paths";
 
 const NODE = JSON.stringify(process.execPath);
 
@@ -129,8 +133,21 @@ test("guard passes on a clean project and names each step", async () => {
   proveSubjects(p.home, p.root);
   const r = await guard(p.root, { ratchetHome: p.home });
   assert.equal(r.ok, true);
-  assert.deepEqual(r.steps.map((s) => s.name), ["integrity", "rows", "validation"]);
-  assert.match(formatGuard(r), /guard passed/);
+  // `coverage` is a warning, not an error: this project declares a subject
+  // and has armed no rows, so the gate is green over nothing and says so.
+  // `coverage` and `frozen instrument` are both warnings, and both are true
+  // of this fixture: it declares a subject with no armed rows, and its check
+  // reaches `check.js` inside the very tree it measures.
+  assert.deepEqual(
+    r.steps.map((s) => s.name),
+    ["integrity", "rows", "coverage", "frozen instrument", "validation"]
+  );
+  assert.deepEqual(
+    r.steps.filter((s) => !s.ok).map((s) => `${s.name}:${s.severity}`),
+    ["coverage:warning", "frozen instrument:warning"]
+  );
+  assert.match(r.steps.find((s) => s.name === "frozen instrument")!.detail, /inside that tree/);
+  assert.match(formatGuard(r), /guard passed with 2 warning/);
 });
 
 test("guard fails on a failing row and prints its witness", async () => {
@@ -211,4 +228,186 @@ test("guard reports corpus corruption as an error", async () => {
   const r = await guard(p.root, { ratchetHome: p.home });
   assert.equal(r.ok, false);
   assert.equal(r.steps.find((s) => s.name === "integrity")!.ok, false);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Standing invariants — enforcing with no row behind them                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A project whose only subject is a prose heuristic that has never failed
+ * here and never will: the shape the capture gate used to refuse outright.
+ *
+ * Five of the eight subjects in the two field experiments looked exactly like
+ * this — Monty Hall is 2/3, particle count equals capacity, the mode
+ * constants index their own table, the tree builds — and every one of them
+ * was turned away for never having failed, which is the reason they are worth
+ * having.
+ */
+function standingProject(rule = "f is 0", rejects = "rejects  f 1", prints = "findings: 0"): {
+  home: string;
+  root: string;
+} {
+  const home = tmpDir();
+  const root = path.join(home, "proj");
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(path.join(home, "tools"), { recursive: true });
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ subjects: {} }), "utf8");
+  fs.writeFileSync(path.join(home, "corpus.jsonl"), "", "utf8");
+  fs.writeFileSync(path.join(home, "journal.jsonl"), "", "utf8");
+  fs.writeFileSync(path.join(home, "tools", "audit.js"), `console.log(${JSON.stringify(prints)});`, "utf8");
+  fs.writeFileSync(
+    path.join(home, "heuristics.rules"),
+    [
+      "heuristic every-card-has-an-image",
+      `  run      ${NODE} {home}/tools/audit.js`,
+      '  measure  f  number after "findings:"',
+      `  rule     ${rule}`,
+      `  ${rejects}`,
+      "  because  a card with no image renders as an empty box in the grid",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  return { home, root };
+}
+
+test("a heuristic proven by a declared rejection enforces with no corpus row", async () => {
+  const { home, root } = standingProject();
+  const results = await verify(root, { ratchetHome: home, quiet: true });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].kind, "standing");
+  assert.equal(results[0].outcome, "pass");
+
+  const r = await guard(root, { ratchetHome: home });
+  assert.equal(r.ok, true);
+  const standing = r.steps.find((s) => s.name === "standing");
+  assert.ok(standing, "a standing invariant is its own step, not a row");
+  assert.match(standing!.detail, /1\/1 standing invariants hold/);
+  // And it is not counted as a row: the catch rate is a statement about rows.
+  assert.match(r.steps.find((s) => s.name === "rows")!.detail, /0\/0 rows pass/);
+});
+
+test("a broken standing invariant fails the build and names itself", async () => {
+  const { home, root } = standingProject("f is 0", "rejects  f 1", "findings: 3");
+  const r = await guard(root, { ratchetHome: home });
+  assert.equal(r.ok, false);
+  const standing = r.steps.find((s) => s.name === "standing")!;
+  assert.equal(standing.ok, false);
+  assert.match(standing.detail, /f measured 3/);
+  assert.match(formatGuard(r), /guard failed: standing/);
+});
+
+test("the two proofs are reported apart, and history outranks a declaration", () => {
+  const { home, root } = standingProject();
+  const config = loadSubjects(home);
+  let proofs = subjectProofs(root, home, config);
+  assert.equal(proofs.get("every-card-has-an-image")!.tier, "declared");
+  assert.equal(proofs.get("every-card-has-an-image")!.standing, true);
+  assert.match(PROOF_LABEL[proofs.get("every-card-has-an-image")!.tier], /declared counterexample/);
+
+  // Adopting the same heuristic against real history is the stronger proof,
+  // and is what gets reported once it exists.
+  proveSubjects(home, root);
+  proofs = subjectProofs(root, home, config);
+  assert.equal(proofs.get("every-card-has-an-image")!.tier, "history");
+  assert.equal(proofs.get("every-card-has-an-image")!.standing, true, "it still enforces without a row");
+});
+
+test("a heuristic with no declared rejection and no history still enforces nothing", async () => {
+  // The state item 1 describes: it sits in heuristics.rules, is listed
+  // UNVALIDATED, and guards nothing at all.
+  const { home, root } = standingProject("f is 0", "note     no proof here");
+  const results = await verify(root, { ratchetHome: home, quiet: true });
+  assert.deepEqual(results, []);
+  const r = await guard(root, { ratchetHome: home });
+  assert.equal(r.steps.some((s) => s.name === "standing"), false);
+  assert.match(r.steps.find((s) => s.name === "validation")!.detail, /no proof they can fail/);
+});
+
+test("an active row for the same subject takes the standing invariant's place", async () => {
+  // Two identical probes per gate is time spent for no information: a row
+  // carrying no input already runs exactly this check.
+  const { home, root } = standingProject();
+  fs.appendFileSync(
+    path.join(home, "corpus.jsonl"),
+    JSON.stringify({
+      op: "capture",
+      id: rowId("every-card-has-an-image", null, "every-card-has-an-image"),
+      at: new Date().toISOString(),
+      subject: "every-card-has-an-image",
+      input: null,
+      test: "every-card-has-an-image",
+      source: "manual",
+    }) + "\n",
+    "utf8"
+  );
+  const results = await verify(root, { ratchetHome: home, quiet: true });
+  assert.equal(results.length, 1);
+  assert.notEqual(results[0].kind, "standing", "the row runs it; the invariant does not run it twice");
+});
+
+/* -------------------------------------------------------------------------- */
+/* Green over nothing                                                          */
+/* -------------------------------------------------------------------------- */
+
+test("a repository that declares subjects and has armed none of them says so", async () => {
+  const p = project();
+  proveSubjects(p.home, p.root);
+  const r = await guard(p.root, { ratchetHome: p.home });
+  const coverage = r.steps.find((s) => s.name === "coverage")!;
+  assert.equal(coverage.severity, "warning");
+  assert.match(coverage.detail, /no armed rows and no standing invariants/);
+  assert.match(coverage.detail, /ratchet adopt/);
+  assert.equal(r.ok, true, "a fresh project is not a failing build");
+});
+
+test("an empty home with no subjects at all warns about nothing", () => {
+  assert.equal(emptyGateWarning([], 0), undefined, "a freshly initialized home is not a finding");
+  assert.match(emptyGateWarning([], 3)!, /declares 3 subject/);
+});
+
+test("an instrument inside the measured tree is a warning, and a token silences it", async () => {
+  // What the particles experiment did: a config pointing at an untracked
+  // script in the tree, while the write-up claimed a frozen instrument.
+  const p = project();
+  proveSubjects(p.home, p.root);
+  const r = await guard(p.root, { ratchetHome: p.home });
+  const frozen = r.steps.find((s) => s.name === "frozen instrument")!;
+  assert.equal(frozen.severity, "warning");
+  assert.match(frozen.detail, /check\.js, which is inside that tree/);
+  assert.match(frozen.detail, /fix: .*\{home\}\/check\.js/);
+
+  fs.mkdirSync(path.join(p.home, "tools"), { recursive: true });
+  fs.copyFileSync(path.join(p.root, "check.js"), path.join(p.home, "tools", "check.js"));
+  fs.writeFileSync(
+    path.join(p.home, "config.json"),
+    JSON.stringify({ subjects: { s: { check: NODE + " {home}/tools/check.js", captureProperty: "p" } } }),
+    "utf8"
+  );
+  const after = await guard(p.root, { ratchetHome: p.home });
+  assert.equal(after.steps.some((s) => s.name === "frozen instrument"), false);
+});
+
+test("instrumentPath names the program, not a flag, a directory or a bare command", () => {
+  assert.equal(instrumentPath("node tools/check.js", false), "tools/check.js");
+  assert.equal(instrumentPath("node --test --experimental-x tools/check.js", false), "tools/check.js");
+  assert.equal(instrumentPath("./tools/check.sh", false), "./tools/check.sh");
+  assert.equal(instrumentPath("npm run verify", false), undefined, "a bare command resolves on PATH");
+  assert.equal(instrumentPath("node {home}/tools/check.js", false), "{home}/tools/check.js");
+});
+
+test("a directory argument is not an instrument", async () => {
+  // `node --test ratchet/dist/test/` measures the tree it points at, and
+  // reading the checked-out commit's tests is the whole point of that subject.
+  const p = project();
+  proveSubjects(p.home, p.root);
+  fs.mkdirSync(path.join(p.root, "suite"), { recursive: true });
+  fs.writeFileSync(
+    path.join(p.home, "config.json"),
+    JSON.stringify({ subjects: { s: { check: NODE + " --test suite/", captureProperty: "p" } } }),
+    "utf8"
+  );
+  const r = await guard(p.root, { ratchetHome: p.home });
+  assert.equal(r.steps.some((s) => s.name === "frozen instrument"), false);
 });

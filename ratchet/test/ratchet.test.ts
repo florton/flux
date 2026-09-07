@@ -14,7 +14,7 @@ import { proveSubjects } from "./proof";
 import { verify } from "../src/verify";
 import { accept, reopen } from "../src/accept";
 import { report, reportData } from "../src/report";
-import { bisect } from "../src/bisect";
+import { bisect, formatBisect } from "../src/bisect";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-test-"));
@@ -363,6 +363,38 @@ test("R6: bisect finds the introducing commit without moving the checkout", asyn
   assert.notEqual(after.branch, "", "and must not be detached");
 });
 
+test("R6: bisect names a fix, not only a regression", async () => {
+  // "When did we lose the arms" and "when did we get them back" are the same
+  // search. The old command answered only the first: it required --good to
+  // pass, and the passing side of a fix is the *newer* commit, which cannot
+  // be an ancestor of the older one. So the direction is measured now.
+  const { dir, good } = seedRepo();
+  const g = (...a: string[]) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+  const broke = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).stdout.trim();
+  fs.appendFileSync(path.join(dir, "lib.js"), "// still broken\n");
+  g("add", "-A");
+  g("commit", "-qm", "c6");
+  fs.writeFileSync(path.join(dir, "lib.js"), "module.exports={f:x=>x}\n", "utf8");
+  g("add", "-A");
+  g("commit", "-qm", "c7-fixes");
+
+  const result = await bisect(dir, rowId("s", 5), broke, "HEAD", { ratchetHome: path.join(dir, ".ratchet") });
+  assert.equal(result.direction, "fixed");
+  const subject = spawnSync("git", ["log", "-1", "--format=%s", result.boundary], { cwd: dir, encoding: "utf8" }).stdout.trim();
+  assert.equal(subject, "c7-fixes");
+  assert.match(formatBisect(result, "s"), /first passes at .*fail -> pass/s);
+});
+
+test("R6: bisect refuses a range whose endpoints agree", async () => {
+  // Not "--bad must be a failing commit": the endpoints simply do not
+  // disagree, so there is no boundary here to find in either direction.
+  const { dir, good } = seedRepo();
+  await assert.rejects(
+    () => bisect(dir, rowId("s", 5), good, "HEAD~1", { ratchetHome: path.join(dir, ".ratchet") }),
+    /passes at both/
+  );
+});
+
 test("R6: a failed bisect still leaves the checkout untouched", async () => {
   const { dir, good } = seedRepo();
   const before = headState(dir);
@@ -462,7 +494,11 @@ test("capture, dedup, verify, accept, reopen, report", async () => {
   await withHome(home, async () => {
     const rep = capture(root, [capFile]);
     assert.equal(rep.added.length, 1, JSON.stringify(rep));
-    assert.equal(rep.skipped.length, 2);
+    // The duplicate counterexample matches a row that is still enforcing, so
+    // it is a *catch*, not a skip: the corpus already held this bug and it
+    // came back. Counting it as a skip is why the all-time rate read 0%.
+    assert.deepEqual(rep.caught.length, 1, JSON.stringify(rep));
+    assert.equal(rep.skipped.length, 1, "only the input that passes now is skipped");
 
     const results = await verify(root, { quiet: true, ratchetHome: home });
     assert.equal(results.length, 1);
@@ -473,11 +509,17 @@ test("capture, dedup, verify, accept, reopen, report", async () => {
     assert.equal((await verify(root, { quiet: true, ratchetHome: home })).length, 0, "archived rows stop enforcing");
 
     // The decision log, which is what the ceremony writes. Validation proofs
-    // live in the same file but are not decisions.
-    const j = readJournal(path.join(home, "journal.jsonl")).filter((e) => e.kind !== "validation");
+    // and recurrences live in the same file but are not decisions.
+    const all = readJournal(path.join(home, "journal.jsonl"));
+    const j = all.filter((e) => e.kind === "accept" || e.kind === "decision");
     assert.equal(j.length, 1);
     assert.equal(j[0].kind, "accept");
     assert.equal(j[0].corpusId, id);
+    // The duplicate capture above was a catch against a row that was still
+    // enforcing, and it is on the record as one.
+    const caught = all.filter((e) => e.kind === "recurrence");
+    assert.equal(caught.length, 1);
+    assert.match(caught[0].text, /matched an active row/);
 
     reopen(root, id.slice(0, 6), "reverted the decision", "alice");
     assert.equal(rows(home)[0].status, "active", "an id prefix resolves to the row");

@@ -1,4 +1,4 @@
-# Ratchet — v0.8 prototype
+# Ratchet — v0.9 prototype
 
 Regression memory for AI-assisted development. The design sketch is
 [../RATCHET.md](../RATCHET.md); this folder is the working implementation.
@@ -33,7 +33,25 @@ Regression memory for AI-assisted development. The design sketch is
 > uniformity invariants over the source — the only mechanism that catches a
 > mechanism wired into some of its call sites and not others. Writing them
 > found four more defects, including one in `adopt` that made every buildable
-> subject look flaky. 159 tests.
+> subject look flaky.
+>
+> **v0.9 stops the gate refusing the checks people most want.** Run against
+> eight real subjects in two outside repositories, the capture gate turned
+> away five of them for never having failed — and the five were the *standing
+> invariants*: Monty Hall is 2/3, particle count equals capacity, the mode
+> constants index their own table, the tree builds. History cannot tell a
+> vacuous check from one whose property has simply never been violated here,
+> and it is not the only available evidence. So a heuristic can now declare a
+> reading its rules must refuse (`rejects`), the tool **checks** that
+> declaration, and a heuristic proven that way enforces as a **standing
+> invariant** with no corpus row behind it. History stays the stronger of two
+> proofs and both are always named. Alongside: `replay` reports *every*
+> transition in a range with its direction rather than the first pass→fail one;
+> `guard` says when it is green over nothing and when an instrument lives
+> inside the tree it measures; the vocabulary gained the nth match, comparisons
+> between two measures, and `needs <path> exists` for "this environment cannot
+> run the check here"; and an active row re-failing finally reaches the catch
+> rate. 193 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; the heuristics are plain text; everything is a file git
@@ -123,14 +141,18 @@ Fixed by the tool, not per project.
 | `because <text>` | why this matters — quoted back on every failure |
 | `seed <n>` | seed `Math.random` in the instrument and anything it spawns |
 | `timeout <ms>` | per-heuristic timeout. Default 30000 |
+| `rejects <measure> <value>` | **checked**: a reading the rules must refuse |
+| `rejects output "..."` | **checked**: a whole fabricated output they must refuse |
 | `owns <path>` | a file whose contents are part of this rule's identity |
-| `applies when <path> exists` | report n/a where that path is absent |
+| `applies when <path> exists` | report n/a where that path is absent — *the subject* did not exist yet |
+| `needs <path> exists` | report "could not run here" where that path is absent — *the environment* cannot |
 
 Ways to read a value:
 
 | Extractor | Reads |
 |---|---|
 | `the number after "LABEL"` | the first number following that text in stdout |
+| `the 2nd number after "LABEL"` | ...following its 2nd appearance. Any ordinal |
 | `the json field a.b.c` | parse stdout as JSON, follow a dotted path |
 | `the count of lines matching "TEXT"` | how many output lines contain it |
 | `the exit code` | the instrument's own status |
@@ -141,6 +163,22 @@ Ways to check one: `is` · `is not` · `is one of A, B, C` · `is above N` ·
 `is within P percent of N` · `contains "S"` · `does not contain "S"` ·
 `starts with "S"` · `ends with "S"` · `is empty` · `is not empty` ·
 `is a number` · `is the same as <other measure>`.
+
+`is above` · `is below` · `is at least` · `is at most` each take **either a
+number or another measure of the same run**, so the natural statement of a
+Monty Hall check —
+
+```
+measure  keep    the first number after "Win percent:"
+measure  change  the second number after "Win percent:"
+rule     change is above keep
+```
+
+— says what it looks like it says. Before, the vocabulary had `is the same as`
+and nothing else, so a comparison between two readings could only be written as
+equality; the workaround was to band the raw counts and pin the denominator,
+which couples a rule that is always true to an iteration count that is free to
+change.
 
 **A `note` is not a rule.** It is prose the vocabulary cannot express, it is
 never checked, and it is excluded from every rule count — listed as
@@ -219,7 +257,7 @@ before trusting a subject. A guarantee that needs remembering is a guarantee
 that lapses on the first busy afternoon. `tsc` does not ask you to remember to
 typecheck.
 
-So: one gate, one exit code, four questions.
+So: one gate, one exit code.
 
 ```
 $ ratchet guard
@@ -228,19 +266,35 @@ $ ratchet guard
 ✗ rows                 0/1 rows pass, 1 failing
   ✗ c74c11d9f basic-edge — edge measured -0.0564, rule says "edge is between -0.03 and 0.015"
   run `ratchet verify` for the full witness, or `ratchet show <id>` for one row's history
-✓ validation           all 3 subject(s) proven against a known bug
+✓ standing             1/1 standing invariants hold
+! validation           1 subject(s) have no proof they can fail: visual-diff-is-sound
+    prove one against history:   ratchet validate visual-diff-is-sound --known-bad <sha> --known-good HEAD
+    or without it, in the rules: rejects <measure> <a value the rules must refuse>
+    8 validated against history: cli-end-to-end, cli-errors-are-messages, ...
+    1 validated against a declared counterexample: test-suite
 
 guard failed: rows
 ```
 
 | Step | Fails the build | Because |
 |---|---|---|
-| rules file parses | **yes** | a clause that stopped parsing is a check that stopped running |
+| rules file parses | **yes** | a clause that stopped parsing is a check that stopped running; a `rejects` line the rules accept is one of the ways it can stop |
 | rules file is canonical | warning | formatting is not a regression |
 | corpus integrity | **yes** | a row hidden behind a parse error is a false pass |
 | active rows hold | **yes** | this is the regression gate |
+| standing invariants hold | **yes** | a property that has always held here does not any more |
+| no armed rows at all | warning | green over nothing: subjects declared, none enforcing |
 | gate is mostly `na` | warning | green while checking almost nothing |
-| every subject validated | warning (`--strict`: yes) | caught harder at `capture`, below |
+| instrument inside the tree | warning | correct at HEAD, wrong under every history command |
+| every subject proven | warning (`--strict`: yes) | caught harder at `capture`, below |
+
+The last four are the shapes of *green over nothing*, and each of them reads as
+success while checking less than it appears to. Two of them are new in v0.9 and
+neither is hypothetical: a defect in this repository was written down as "not a
+defect, the shape of one" because the check that would have caught it ran
+against an empty corpus where the two routes it compared both answer `0/0 rows
+pass`; and one of the two field experiments claimed a frozen instrument in its
+write-up while pointing at an untracked script inside the tree it measured.
 
 ### Wire it into git
 
@@ -261,11 +315,10 @@ A hook is advisory — `--no-verify` exists, and a fresh clone has no hooks — 
 CI runs the same command. A committed workflow is in
 [ci/github-actions.yml](ci/github-actions.yml).
 
-## Validation is a gate, not a ritual
+## Two proofs that a check can fail
 
-> Every subject must be proven to fail on at least one known past bug before it
-> can be captured from. A subject that passes through history's known bugs is
-> too weak.
+> Every subject must be proven to fail before it can be captured from. A
+> subject that passes through history's known bugs is too weak.
 
 `ratchet validate` has existed since v0.4, and nothing made anyone run it. Now
 `capture` refuses:
@@ -284,25 +337,107 @@ carries a permanent green light over nothing. It is also the load-bearing
 safety mechanism for *generated* coverage heuristics, which arrive in bulk and
 are exactly the kind that pass through every bug.
 
-> **Known limitation, and the next thing to be fixed.** Proof today means
-> proof *from history*, and that turns away a check which has never failed
-> because the property it guards has never been violated — the standing
-> invariant, which is the most valuable kind. Re-running the field experiments
-> against v0.8 refused **five of eight** real subjects on these grounds:
-> Monty Hall is 2/3 whatever this repository's history says, particle count
-> must equal capacity, the mode constants must index their own table, the tree
-> must build. Nor is it only a matter of strictness: `verify` enforces rows,
-> `adopt` will not capture a row where nothing fails, and `capture` skips a
-> counterexample whose check passes now — so such a subject has no path to
-> enforcing at all. A library for stopping regressions cannot require that the
-> regression have already happened. The fix — a declared counterexample as a
-> second, weaker, always-available tier of proof, and a home for the standing
-> invariant beside the corpus — is item 1 of
-> [NEXT_STEPS_V4.md](../NEXT_STEPS_V4.md).
-
 The proof is recorded against the rule hash it was proven under, so **editing a
 check invalidates its own validation**. "Validated once" never means "trusted
 forever".
+
+### The second tier: a declared counterexample
+
+Until v0.9, proof meant proof *from history* — which turned away a check that
+has never failed because the property it guards has never been violated. That
+is the *standing invariant*, and it is the most valuable kind of check there
+is. Re-running the field experiments against v0.8 refused **five of eight**
+real subjects on those grounds: Monty Hall is 2/3 whatever a repository's
+history says, particle count must equal capacity, the mode constants must index
+their own table, the tree must build.
+
+The proxy was measuring the wrong thing. The gate exists to refuse a *vacuous*
+check — one with no power to discriminate — and "did it fail somewhere in
+history" conflates that with a check that discriminates perfectly well and has
+simply never been given the chance. History cannot tell them apart, and it is
+not the only available evidence.
+
+Since v0.7 a heuristic is *data*: the rules are pure predicates over named
+measures, so they can be evaluated against a hypothetical reading with no
+process, no git and no clock. So a declared rejection costs nothing:
+
+```
+heuristic monty-hall
+  run      node deal.js
+  measure  keep  the number after "Keep wins:"
+  rule     keep is between 3200000 and 3500000
+  rejects  keep 5000000
+  because  Monty Hall is 1/3 keep and 2/3 switch, an outside truth that does
+  because  not depend on any of this code being right
+```
+
+`rejects` is a **claim the tool checks**. Evaluate the rules against that
+reading; if they accept it, that is a hard error naming the line and the
+column:
+
+```
+heuristics.rules:5:11: you declared that "monty-hall" rejects keep = 3300000, and
+every rule accepts it ("keep is between 3200000 and 3500000")
+   5 |   rejects  keep 3300000
+     |           ^
+```
+
+A proof that does not prove anything is caught the same way a clause that does
+not parse is. There is a stronger optional form for when the extractor is the
+risky part — `rejects output "Keep wins: 5000000"` runs the whole pipeline,
+extraction and judgment both, against a fabricated instrument output — and a
+fabricated output that the *extractors* cannot read is refused too, because
+"the extractor found nothing" is not evidence that the band discriminates.
+
+**What each proof establishes, and what it does not.** A declared rejection
+proves the rule discriminates; any successful run proves the extraction works.
+Together they refute vacuity without a bug ever having happened. What they do
+**not** prove, and what history does, is that the check catches a mistake a
+human actually made. So the two are *ordered*, not equivalent, and the tool
+never prints a bare "validated" again:
+
+```
+$ ratchet yield
+  cli-end-to-end   1 row  (1 active)  evidence today   [prose, validated against history]
+  test-suite       0 rows (0 active)  no evidence yet  [prose, validated against a declared counterexample, standing]
+  visual-diff-is-sound  0 rows (0 active)  no evidence yet  [script, UNVALIDATED]
+```
+
+Neither does a declared rejection move the rule hash. It changes nothing about
+what is measured or how a reading is judged, so folding it into the hash would
+quarantine every row in a repository the moment somebody strengthened a proof —
+punishing exactly the behavior the second tier exists to invite. It is re-checked
+on *every* load instead, which is the stricter guarantee.
+
+### The standing invariant
+
+A heuristic proven by a declared rejection enforces **as itself**, with no
+corpus row:
+
+```
+$ ratchet guard
+✓ rows        8/8 rows pass
+✓ standing    1/1 standing invariants hold
+```
+
+The corpus is memory of *counterexamples*: a row says "this exact input once
+broke, and never again". A standing invariant is not a counterexample and is
+not made into one. Minting a synthetic row from the declared rejection would be
+less work and worse — it puts a line in the corpus that never happened, and the
+corpus's whole value is that every line in it did.
+
+So `verify` runs rows ∪ standing invariants, `guard` reports them as separate
+steps, and the catch rate stays a statement about rows, because that is what it
+measures. A subject with an active row carrying no input already runs the same
+check, so the invariant stands aside for it rather than probing twice.
+
+**What neither proof establishes**, and it is worth saying out loud: that the
+instrument *exercised* anything. A rule can discriminate perfectly and an
+extractor can read a real number out of a run that set nothing up. Building
+v0.8's end-to-end subject produced a live example — a scenario passed while
+comparing nothing at all, because the row it needed had not been armed. It was
+fixed by asserting the precondition, which is a thing a human noticed and no
+mechanism would have.
 
 `--allow-unvalidated` is the escape hatch for a subject's very first use, and
 it is journaled once per subject — the exception goes on the record rather than
@@ -515,9 +650,11 @@ ratchet reopen <id> --reason "..." [--actor name]
 ratchet note --text "..." [--actor name]
 ratchet report                    corpus stats and churn summary
 ratchet fsck                      corpus and journal integrity check
-ratchet bisect <id> --good ref --bad ref [--setup "npm ci"]
+ratchet bisect <id> --from <older-ref> --to <newer-ref> [--setup "npm ci"]
+                                  names the boundary and which way it runs
 ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
                [--setup "npm ci"] [--no-pinpoint]
+                                  every transition in the range, with its direction
 ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
 ratchet visual record <subject> --route <url> [--file <png>] [--viewport WxH]
                        [--tolerance N] [--max-percent P] [--wait-ms ms]
@@ -631,6 +768,29 @@ which history commands carry *out* of the working tree. The same script then
 measures every commit. `RATCHET_HOME` is exported to every check for the same
 purpose.
 
+Since v0.9 the tool says so rather than leaving it to be discovered. `fsck` and
+`guard` warn when a subject's instrument resolves inside the tree it measures
+and does not go through a token:
+
+```
+! frozen instrument   "physics-sanity" measures the tree through tools/check.cjs,
+                      which is inside that tree and untracked: in a worktree the
+                      file is simply absent, so replay, adopt, bisect and
+                      validate cannot run it at all
+    fix: move it under the ratchet home and reach it through the token, as in:
+         node {home}/check.cjs
+```
+
+This is not hypothetical. One of the two field experiments pointed its config
+at an untracked script in the tree while its write-up listed *"Frozen
+instrument. The check script is pinned across every commit"* as one of three
+guards on instrument integrity. That was true of the other repository and false
+of this one, and nothing said so — because in v0 the history commands checked
+commits out in place and the distinction could not bite. v0.4 moved history
+into worktrees and made it bite. A *directory* argument is deliberately not an
+instrument: `node --test dist/test/` measures the tree it points at, and reading
+the checked-out commit's tests is the whole point of that subject.
+
 ## Capture sources
 
 - **fast-check** — a custom reporter writes `ratchet-capture.json` on failure
@@ -680,25 +840,46 @@ one it was created to watch:
 A check that prints nothing on failure degrades to `exit:<code>`, which is a
 much weaker guarantee. Printing why you failed is what buys the strong one.
 
-## The three outcomes
+## The four outcomes
 
-A check exits 0 to pass and nonzero to fail. It may also exit **125** to say
-*not applicable at this commit* — the third outcome, borrowed from
-`git bisect skip`:
+A check exits 0 to pass and nonzero to fail. It may also exit **125** for *not
+applicable at this commit* (borrowed from `git bisect skip`) or **126** for
+*this environment cannot run me here*:
 
 ```
 ✓ c87cb67944d6f s
 ✗ cfd1f483d53bf s 13 — unlucky
 − c74cef33855a7 s 7 — n/a: feature absent at this commit
+∅ b1993ac02f4e1 s 9 — could not run here: no compiler on this machine
 
-2/4 rows pass, 1 failing, 1 n/a
+2/5 rows pass, 1 failing, 1 n/a, 1 could not run here
 ```
 
-`na` is neither a pass nor a failure and does not fail the build, which is
-what replay across history needs: a check that cannot apply to a 2019 commit
-should not be scored as a bug there. A check that cannot be *spawned* stays a
-failure — that is indistinguishable from a broken config, and silently
-greening it would be the false pass this tool exists to prevent.
+Neither is a pass or a failure, and neither fails the build — which is what
+replay across history needs: a check that cannot apply to a 2019 commit should
+not be scored as a bug there.
+
+**They are two different claims and were one outcome until v0.9.** "This
+feature did not exist yet" is a fact about the commit; "today's toolchain
+cannot prepare that commit" is a fact about the machine, and reporting the
+second as a failure manufactures a regression out of dependency rot. `replay
+--setup` had already made the distinction for setup failures and nothing let a
+*check* make it, so every scripted instrument grew its own three-way split by
+hand. In prose:
+
+```
+applies  when src/sim.c exists    n/a here: the subject did not exist yet
+needs    node_modules exists      could not run here: the environment cannot
+```
+
+A check that cannot be *spawned at all* stays a failure — that is
+indistinguishable from a broken config, and silently greening it would be the
+false pass this tool exists to prevent. One caveat on 126: it is also the
+shell's own code for "found but not executable", so a `shell: true` subject
+whose command is not executable reports "could not run here" rather than
+failing. That is the same claim, and it is loud rather than silent — a subject
+returning no verdict at every commit trips the "most of this gate is not
+checking anything here" warning on its first run.
 
 ## Integrity
 
@@ -761,9 +942,22 @@ environment: node v20.9.0 on win32/x64
   ✓ 4abc1d54  2026-03-01  5 pass, 0 fail  ...
   ✗ 9f53b4d2  2026-03-08  4 pass, 1 fail  widescreen refactor
   ...
-transition between 4abc1d54 and 9f53b4d2, halved in 3 probes:
-  first bad commit: 9f53b4d2  widescreen refactor
+transitions (2):
+  broke  at 3b89381e  "Update README.md"     pass -> fail, halved in 2 probes (between 4abc1d54 and 9f53b4d2)
+  fixed  at 9f53b4d2  "widescreen refactor"  fail -> pass, halved in 2 probes (between 9f53b4d2 and c1177ee0)
+  first bad commit: 3b89381e  Update README.md
 ```
+
+**Every** boundary is reported, with its direction. Until v0.9 `replay` looked
+for a `pass` followed by a `fail` and halved that window only, so a range whose
+boundary ran the other way answered *"no pass -> fail transition inside this
+range"* and had to be closed by hand — which is exactly the work the command
+exists to remove. "When did we lose the arms" and "when did we get them back"
+are the same question asked twice, and a range holding both a break and a later
+fix — the ordinary case for any bug that was found and fixed — used to report
+at most the first of them, labelled `first bad commit` whichever it was.
+Monotonicity is still assumed *within* a window; sampling is what finds the
+windows, and that assumption is now per-window rather than per-range.
 
 - `--every N` samples every Nth commit; `--every day|week` takes the first
   commit in each period; dense is the default.
@@ -806,8 +1000,23 @@ busy afternoon.
 
 ## Bisect (retroactive replay)
 
-`ratchet bisect <id> --good ref --bad ref` binary-searches the commit range
-and reports the first commit where the row fails. It runs entirely inside a
+`ratchet bisect <id> --from <older-ref> --to <newer-ref>` binary-searches the
+commit range and reports the boundary **and which way it runs**:
+
+```
+row 3f2a91c first passes at 9f53b4d2ab...
+  fail -> pass, found in 5 probes
+```
+
+The two refs are range endpoints in history order, not verdicts. Naming them
+`--good`/`--bad` presumed the older one passes, which made the command answer
+only half the question it is asked — the passing side of a *fix* is the newer
+commit, and `--good` has to be an ancestor of `--bad`. The old flags still work
+as aliases for the older and newer ref. A range whose endpoints agree is
+refused as having no boundary in it, rather than as "`--bad` must be a failing
+commit".
+
+It runs entirely inside a
 detached `git worktree`: your checkout never moves, a dirty working tree is
 fine, and the worktree is torn down even when a probe throws. When the range
 contains merges the search follows first-parent, because a binary search over
@@ -972,8 +1181,13 @@ heuristic test-suite
   applies  when ratchet/dist/test exists
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
+  measure  status  exit code
   rule     failing is 0
-  rule     passing is at least 159
+  rule     passing is at least 193
+  rule     status is one of 0, 1
+  rejects  failing 1
+  rejects  passing 192
+  rejects  status 7
   because  a suite that shrinks silently is how a ratchet stops ratcheting: the
   because  count is a floor, raised deliberately, never lowered by accident
 ```
@@ -982,6 +1196,13 @@ Two measures, two rules, no plumbing. The `passing` floor is the ratchet
 applied to the ratchet's own coverage — adding tests keeps it satisfied,
 quietly deleting them does not. `applies when` makes it report `na` at commits
 that predate the build rather than manufacturing a failure there.
+
+**And it is the worked example of item 1.** This heuristic has never failed in
+this repository's history and never will while the suite is green, so `adopt`
+had nothing to arm it with: it sat in `heuristics.rules` listed `UNVALIDATED`,
+enforcing nothing at all, through three versions. The two `rejects` lines are
+its proof, and the moment they were added it became a standing invariant and
+started enforcing — and caught a red suite on its first run.
 
 If the prose form could not express the standing invariants of the tool that
 ships it, there would be no honest way to claim it expresses anyone else's.
@@ -994,13 +1215,17 @@ npm run build
 npm test
 ```
 
-159 tests: one regression test per defect closed from the v0 review, the visual
+193 tests: one regression test per defect closed from the v0 review, the visual
 codec/diff/loop tests, the v0.7 additions — canonicalization and its
-failure modes, every extractor and predicate, the probe's three outcomes and
+failure modes, every extractor and predicate, the probe's outcomes and
 its seeding, the capture gate, `guard`, the hook installer, and the
-git-sourced heuristic history — and the v0.8 additions: the token vocabulary,
+git-sourced heuristic history — the v0.8 additions: the token vocabulary,
 a prose heuristic reaching an instrument that lives only in the home, and
-`adopt` preparing its confirmation probe. The demo is generated by
+`adopt` preparing its confirmation probe — and the v0.9 additions: declared
+rejections and every way one can fail to be a proof, standing invariants and
+their separation from rows, the nth match and measure-to-measure comparisons,
+both directions of a transition in `replay` and `bisect`, the instrument-inside-
+the-tree detector, and the two kinds of "no verdict". The demo is generated by
 `node demo/setup.js`; see [demo/README.md](demo/README.md).
 
 ## What this prototype still leaves out
@@ -1014,6 +1239,22 @@ From the design in [../RATCHET.md](../RATCHET.md), still absent:
   catalogue snapshot sets).
 - **Metric budgets** in their baseline-relative form, and static checks.
 - The agent attach: dispatching an investigation when a row goes red.
+
+Still outstanding in the measure vocabulary, unchanged by v0.9:
+
+- **A baseline that moves.** `is within 5 percent of 0.5` works against a
+  constant; the metric-budget shape is relative to the previous run or a named
+  ref, and nothing expresses it.
+- **Repeated structure.** A `for each` over rows of the output, so "every card
+  has an image" stops needing someone to write a command that counts.
+- **Two-sided readings.** Comparing across two runs — the round-trip shape.
+
+And two costs v0.9 did not touch: **every project hand-rolls its worktree
+setup** (supply `node_modules` without hitting the network once per commit,
+then build — nobody's idea of interesting, and a project cannot replay anything
+until it has written one), and **there is no per-commit artifact cache**, so
+arming one subject costs 3m44s over 9 commits on one field repository and
+2m18s over 6 on another, almost all of it setup and build repeated per commit.
 
 The v0.6 plan — heuristics as data, validation as a capture gate, `ratchet
 adopt`, yield reporting, and the merge-landscape glue — is

@@ -27,6 +27,17 @@ export interface CaptureReport {
   skipped: string[];
   /** Counterexamples that match a row the accept ceremony had retired. */
   recurred: Recurrence[];
+  /**
+   * Counterexamples that match a row that is *still enforcing* — a known bug
+   * came back and the corpus already held it.
+   *
+   * This is the common case, the case the whole tool is for, and until now it
+   * was reported as `skipped (already in corpus)` and journaled nowhere. So
+   * the catch rate counted retired-row recurrences only, and `ratchet report`
+   * read "0 caught, 8 new (0%)" on a repository where the ratchet was working
+   * — a headline number that could not move however well the tool worked.
+   */
+  caught: string[];
   /** Bindings dropped because their subject has no check configured. */
   unconfigured: string[];
   /** Counterexamples whose repeated runs disagreed — a flaky check. */
@@ -259,7 +270,7 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
   const corpusPath = path.join(ratchetDir, "corpus.jsonl");
   const journalPath = path.join(ratchetDir, "journal.jsonl");
   const commit = currentCommit(cwd);
-  const report: CaptureReport = { added: [], skipped: [], recurred: [], unconfigured: [], flaky: [], unvalidated: [] };
+  const report: CaptureReport = { added: [], skipped: [], recurred: [], caught: [], unconfigured: [], flaky: [], unvalidated: [] };
 
   // The gate, resolved once: a subject is trusted when the journal holds a
   // validation proof recorded against the rule it is running under now.
@@ -318,6 +329,12 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
     }
     if (confirm.outcome === "na") {
       report.skipped.push(`${b.subject} (check reports n/a here: ${confirm.reason})`);
+      continue;
+    }
+    if (confirm.outcome === "na-env") {
+      // Not a counterexample and not a broken check: the environment cannot
+      // run this here, so nothing was measured to store.
+      report.skipped.push(`${b.subject} (the check cannot run in this environment: ${confirm.reason})`);
       continue;
     }
     if (confirm.pass) {
@@ -386,7 +403,24 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
     const existing: RowState | undefined = rows.get(id);
 
     if (existing && existing.status === "active") {
-      report.skipped.push(`${id} ${b.subject} ${stableStringify(input)} (already in corpus)`);
+      // A red run whose failing input is a row that is still enforcing: the
+      // corpus remembered this bug and it came back anyway. That is a catch,
+      // and it is journaled here rather than at `verify` time on purpose —
+      // `capture` is an explicit act against a named artifact, so writing is
+      // expected, whereas a gate that appended to a committed file on every
+      // build would dirty the tree inside a pre-commit hook.
+      const at = new Date().toISOString();
+      appendJournal(journalPath, {
+        at,
+        kind: "recurrence",
+        actor: opts.actor ?? "ratchet",
+        text:
+          `counterexample matched an active row: the corpus already holds this exact input and it is failing again` +
+          ` — ${reason}`,
+        corpusId: id,
+        commit,
+      });
+      report.caught.push(`${id} ${b.subject} ${stableStringify(input)}`);
       continue;
     }
 

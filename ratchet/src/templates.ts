@@ -13,6 +13,8 @@ export const RULES_TEMPLATE = `# Heuristics, in prose. Each block below is a sub
 #   run      the command that produces the observation
 #   measure  how to read a number or a string out of what it printed
 #   rule     what must be true of that value            (checked)
+#   rejects  a reading the rules must refuse            (checked, and it is
+#            how a check that has never failed here proves it can fail at all)
 #   note     anything the vocabulary cannot say         (never checked)
 #   because  why this matters, quoted back on failure
 #
@@ -22,6 +24,7 @@ export const RULES_TEMPLATE = `# Heuristics, in prose. Each block below is a sub
 #
 # Ways to measure:
 #   the number after "LABEL"              the first number following that text
+#   the 2nd number after "LABEL"          ...following its 2nd appearance
 #   the json field a.b.c                  parse stdout as JSON, read a path
 #   the count of lines matching "TEXT"    how many output lines contain it
 #   the exit code                         the command's own status
@@ -32,12 +35,30 @@ export const RULES_TEMPLATE = `# Heuristics, in prose. Each block below is a sub
 #   contains / does not contain / starts with / ends with / is empty /
 #   is a number / is the same as ANOTHER-MEASURE
 #
+# The four comparisons take either a number or another measure of the same
+# run, so "change is above keep" says what it looks like it says.
+#
+# Ways to prove a check can fail, strongest first:
+#   ratchet adopt <name> --good <old-ref>   it failed where a real bug lived
+#   rejects <measure> <value>               the rules refuse that reading
+#   rejects output "..."                    the rules refuse that whole output
+#
+# A \`rejects\` line is checked, not asserted: if every rule accepts the reading
+# you declared, that is an error with a line and a column. It is what lets an
+# invariant that has never been violated here -- arithmetic, a conservation
+# law, "the build works" -- enforce without inventing a bug it never had.
+#
+# When a check does not apply, say which kind:
+#   applies when <path> exists   this feature did not exist at that commit
+#   needs <path> exists          this environment cannot run the check here
+#
 # Delete the example below once you have your own.
 
 # heuristic every-card-has-an-image
 #   run      node tools/audit-cards.js
 #   measure  missing  the number after "cards without images:"
 #   rule     missing is 0
+#   rejects  missing 1
 #   because  a card with no image renders as an empty box in the grid
 `;
 
@@ -62,6 +83,8 @@ export const INIT_MESSAGE = [
   "",
   "next:",
   "  1. write a heuristic in .ratchet/heuristics.rules",
-  "  2. ratchet adopt <name> --good <an-old-ref>   prove it against your own history",
+  "  2. prove it can fail, either way:",
+  "       ratchet adopt <name> --good <an-old-ref>   against your own history",
+  "       or add a `rejects <measure> <value>` line  against a stated reading",
   "  3. ratchet hooks install                      make it enforce on every commit",
 ].join("\n");

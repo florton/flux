@@ -3,6 +3,7 @@ import { readCorpus, foldCorpus, stableStringify } from "./corpus";
 import { readJournalFile } from "./journal";
 import { loadSubjects } from "./paths";
 import { validatedSubjects } from "./validate";
+import { subjectProofs, PROOF_LABEL } from "./proof";
 import { yieldReport } from "./yield";
 
 function ratchetHome(cwd: string): string {
@@ -15,7 +16,10 @@ export interface ReportData {
   archived: number;
   /** Novel counterexamples captured in the last 7 days (first capture of an id). */
   newThisWeek: number;
-  /** Recurrence journal entries in the last 7 days — regressions the corpus already knew. */
+  /**
+   * Recurrence journal entries in the last 7 days — regressions the corpus
+   * already knew, whether the row was retired at the time or still enforcing.
+   */
   caughtThisWeek: number;
   /** caught / (caught + new) over the last 7 days, or null with no observations. */
   catchRateThisWeek: number | null;
@@ -79,7 +83,10 @@ export function reportData(cwd: string): ReportData {
   }
 
   // Caught = the corpus remembering past itself: a counterexample that came
-  // back after its row was retired (journaled at capture, see capture.ts).
+  // back, journaled at capture (see capture.ts). Both shapes count — a row
+  // that had been retired by the accept ceremony, and a row that was still
+  // enforcing when the bug returned. Only the first used to, which is why
+  // this number read 0% on a repository where the tool was working.
   const recurrences = journal.events.filter((e) => e.kind === "recurrence");
   const caughtAllTime = recurrences.length;
   const caughtThisWeek = recurrences.filter((e) => inWindow(e.at, weekAgo)).length;
@@ -150,10 +157,17 @@ export function report(cwd: string): string {
   // the outside; the portfolio is the human's to manage, so say which is which.
   try {
     const config = loadSubjects(ratchetHome(cwd));
+    const proofs = subjectProofs(cwd, ratchetHome(cwd), config);
     const y = yieldReport(ratchetHome(cwd), config, validatedSubjects(cwd, ratchetHome(cwd), config), {
       fromRules: config.fromRules,
+      proofs,
     });
-    const unvalidated = y.subjects.filter((s) => !s.validated);
+    const unvalidated = y.subjects.filter((s) => s.proof === "none");
+    // Never a bare "validated": the two proofs are ordered, not equivalent.
+    for (const tier of ["history", "declared"] as const) {
+      const named = y.subjects.filter((s) => s.proof === tier).map((s) => s.subject);
+      if (named.length > 0) lines.push(`${named.length} ${PROOF_LABEL[tier]}: ${named.join(", ")}`);
+    }
     if (y.stale.length > 0) {
       lines.push(
         `quiet over ${y.staleAfterDays}d: ${y.stale.map((s) => `${s.subject} (${s.quietDays}d)`).join(", ")}`
@@ -161,7 +175,7 @@ export function report(cwd: string): string {
     }
     if (unvalidated.length > 0) {
       lines.push(
-        `[!] ${unvalidated.length} subject(s) with no validation proof for their current rule: ${unvalidated.map((s) => s.subject).join(", ")}`
+        `[!] ${unvalidated.length} subject(s) with no proof they can fail, for their current rule: ${unvalidated.map((s) => s.subject).join(", ")}`
       );
     }
   } catch {

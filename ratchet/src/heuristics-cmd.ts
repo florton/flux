@@ -18,6 +18,7 @@ import { ruleHash } from "./rule";
 import { validatedSubjects } from "./validate";
 import { loadSubjects } from "./paths";
 import { yieldReport } from "./yield";
+import { subjectProofs, declaredRejections, PROOF_LABEL, type ProofTier } from "./proof";
 
 export interface FmtResult {
   file: string;
@@ -97,9 +98,13 @@ export interface HeuristicSummary {
   notes: string[];
   because?: string;
   seed?: number;
+  rejects: string[];
   rows: number;
   activeRows: number;
   validated: boolean;
+  /** Which proof this heuristic has, never merely that it has one. */
+  proof: ProofTier;
+  standing: boolean;
   quietDays: number | null;
   line: number;
 }
@@ -108,8 +113,9 @@ export function listHeuristics(cwd: string, ratchetDir: string): HeuristicSummar
   const loaded = loadHeuristics(ratchetDir);
   if (loaded.problems.length > 0) throw new Error(formatProblems(loaded.file, loaded.problems));
   const config = loadSubjects(ratchetDir);
+  const proofs = subjectProofs(cwd, ratchetDir, config);
   const validated = validatedSubjects(cwd, ratchetDir, config);
-  const yields = yieldReport(ratchetDir, config, validated, { fromRules: config.fromRules });
+  const yields = yieldReport(ratchetDir, config, validated, { fromRules: config.fromRules, proofs });
   const byName = new Map(yields.subjects.map((s) => [s.subject, s]));
 
   return loaded.heuristics.map((h) => {
@@ -120,12 +126,15 @@ export function listHeuristics(cwd: string, ratchetDir: string): HeuristicSummar
       run: h.run,
       measures: h.measures.map((m) => `${m.name} = ${describeExtractor(m.extractor)}`),
       rules: h.rules.map((r) => r.text),
+      rejects: declaredRejections({ check: "", heuristic: h }),
       notes: h.notes,
       because: h.because,
       seed: h.seed,
       rows: y?.rows ?? 0,
       activeRows: y?.activeRows ?? 0,
       validated: y?.validated ?? false,
+      proof: proofs.get(h.name)?.tier ?? "none",
+      standing: proofs.get(h.name)?.standing ?? false,
       quietDays: y?.quietDays ?? null,
       line: h.line,
     };
@@ -147,25 +156,27 @@ export function formatHeuristicList(items: HeuristicSummary[], file: string): st
   for (const h of items) {
     const flags = [
       `${h.rows} row${h.rows === 1 ? "" : "s"}`,
-      h.validated ? "validated" : "UNVALIDATED",
+      PROOF_LABEL[h.proof],
+      h.standing && h.rows === 0 ? "enforcing as a standing invariant" : null,
       h.seed !== undefined ? `seed ${h.seed}` : null,
       h.notes.length ? `${h.notes.length} note${h.notes.length === 1 ? "" : "s"} (unchecked)` : null,
     ].filter(Boolean);
     lines.push(`${h.name}  (rule ${h.ruleHash}, ${path.basename(file)}:${h.line}) — ${flags.join(", ")}`);
     lines.push(`  run  ${h.run}`);
     for (const r of h.rules) lines.push(`  rule ${r}`);
+    for (const r of h.rejects) lines.push(`  rejects ${r}  (checked: the rules must refuse this)`);
     // Notes are excluded from every rule count, and saying so at the point of
     // display is what stops them being read as guarantees.
     for (const n of h.notes) lines.push(`  note ${n}  (prose only, never checked)`);
     lines.push("");
   }
-  const unvalidated = items.filter((h) => !h.validated);
+  const unvalidated = items.filter((h) => h.proof === "none");
   if (unvalidated.length > 0) {
     lines.push(
       `${unvalidated.length} heuristic(s) have no proof they can fail: ${unvalidated.map((h) => h.name).join(", ")}`
     );
-    lines.push(`  prove one: ratchet validate ${unvalidated[0].name} --known-bad <sha> --known-good HEAD`);
-    lines.push(`  or adopt it against your own history: ratchet adopt ${unvalidated[0].name} --good <old-ref>`);
+    lines.push(`  prove one against history: ratchet adopt ${unvalidated[0].name} --good <old-ref>`);
+    lines.push(`  or without history, in the block itself: rejects <measure> <a value the rules must refuse>`);
   }
   return lines.join("\n");
 }

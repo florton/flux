@@ -19,7 +19,7 @@ export interface ReplayOptions {
   setup?: string;
   ratchetHome?: string;
   concurrency?: number;
-  /** Skip the halving pass that pinpoints a transition. */
+  /** Skip the halving pass that closes each transition to one commit. */
   noPinpoint?: boolean;
   /**
    * Replay the configured *subjects* rather than the corpus rows.
@@ -42,6 +42,28 @@ export interface ReplaySample {
   note?: string;
 }
 
+/**
+ * A verdict boundary, closed to a single commit and labelled by direction.
+ *
+ * v0 searched for *the* transition, and only a pass -> fail one: it reported
+ * "no pass -> fail transition inside this range" on a repository whose
+ * boundary ran the other way, and the manual probing that answer forced is
+ * exactly the work `replay` exists to remove. "When did we lose the arms" and
+ * "when did we get them back" are the same question asked twice, and a range
+ * that holds both a break and a fix — the ordinary case for any bug that was
+ * found and fixed — used to report at most the first of them, labelled
+ * `first bad commit` whichever it was.
+ */
+export interface Transition {
+  /** `broke` is pass -> fail; `fixed` is fail -> pass. */
+  kind: "broke" | "fixed";
+  /** The first commit on the *new* side of the boundary. */
+  commit: CommitInfo;
+  probes: number;
+  /** The sampled commits the boundary was found between. */
+  window: [string, string];
+}
+
 export interface ReplayReport {
   environment: Environment;
   policy: SamplePolicy;
@@ -49,8 +71,12 @@ export interface ReplayReport {
   total: number;
   firstParent: boolean;
   samples: ReplaySample[];
-  /** Set when a pass -> fail transition was closed to a single commit. */
-  pinpoint?: { firstBad: CommitInfo; probes: number; window: [string, string] };
+  /**
+   * Every verdict boundary in the range, in history order. Monotonicity is
+   * still assumed *within* a window, exactly as before; sampling is what finds
+   * the windows, and that assumption is now per-window rather than per-range.
+   */
+  transitions: Transition[];
 }
 
 export function parsePolicy(every?: string): SamplePolicy {
@@ -135,6 +161,10 @@ function statusOf(results: VerifyResult[]): ReplaySample["status"] {
   if (c.fail > 0) return "fail";
   if (c.quarantine > 0) return "quarantine";
   if (c.pass > 0) return "pass";
+  // A check that said "this environment cannot run me here" is the same
+  // finding as a setup that could not prepare the commit, and is reported the
+  // same way rather than as a plain n/a.
+  if (c.naEnv > 0) return "na-env";
   return "na";
 }
 
@@ -198,46 +228,50 @@ export async function replay(cwd: string, opts: ReplayOptions): Promise<ReplayRe
       total: commits.length,
       firstParent,
       samples,
+      transitions: [],
     };
 
-    // Coarse to fine: the sampler found the window, halving closes it. Only a
-    // pass -> fail transition is pinpointed; na-env samples are skipped over
-    // rather than treated as either side of a boundary. Halving is inherently
-    // sequential and runs on the first session.
+    // Coarse to fine: the sampler finds the windows, halving closes them.
+    //
+    // *Every* adjacent pair of usable samples whose verdict differs is a
+    // window, and each is halved independently. That is the whole of the
+    // generalization: a break and a later fix are two boundaries in one range
+    // and both get named, in history order, with their direction. `na` and
+    // `na-env` samples are skipped over rather than treated as either side of
+    // a boundary. Halving is inherently sequential and runs on one session.
     if (opts.noPinpoint) return report;
     const usable = samples.filter((s) => s.status === "pass" || s.status === "fail");
-    let lastPass: ReplaySample | undefined;
-    let firstFail: ReplaySample | undefined;
-    for (const s of usable) {
-      if (s.status === "pass") {
-        lastPass = s;
-        firstFail = undefined;
-      } else if (!firstFail && lastPass) {
-        firstFail = s;
-        break;
+    const indexOf = (sha: string): number => commits.findIndex((c) => c.sha === sha);
+
+    for (let i = 1; i < usable.length; i++) {
+      const before = usable[i - 1];
+      const after = usable[i];
+      if (before.status === after.status) continue;
+
+      const lo = indexOf(before.commit.sha) + 1;
+      const hi = indexOf(after.commit.sha);
+      if (lo < 0 || hi < 0 || lo > hi) continue;
+
+      // Find the first commit in (before, after] carrying `after`'s verdict.
+      // Written against `before.status` rather than against "pass" so the
+      // search runs identically in both directions.
+      let probes = 0;
+      let a = lo;
+      let b = hi;
+      while (a < b) {
+        const mid = Math.floor((a + b) / 2);
+        probes++;
+        const s = await probe(poolSessions[0], commits[mid]);
+        if (s.status === before.status) a = mid + 1;
+        else b = mid;
       }
+      report.transitions.push({
+        kind: after.status === "fail" ? "broke" : "fixed",
+        commit: commits[a],
+        probes,
+        window: [before.commit.sha.slice(0, 8), after.commit.sha.slice(0, 8)],
+      });
     }
-    if (!lastPass || !firstFail) return report;
-
-    const lo = commits.findIndex((c) => c.sha === lastPass!.commit.sha) + 1;
-    const hi = commits.findIndex((c) => c.sha === firstFail!.commit.sha);
-    if (lo > hi) return report;
-
-    let probes = 0;
-    let a = lo;
-    let b = hi;
-    while (a < b) {
-      const mid = Math.floor((a + b) / 2);
-      probes++;
-      const s = await probe(poolSessions[0], commits[mid]);
-      if (s.status === "pass") a = mid + 1;
-      else b = mid;
-    }
-    report.pinpoint = {
-      firstBad: commits[a],
-      probes,
-      window: [lastPass.commit.sha.slice(0, 8), firstFail.commit.sha.slice(0, 8)],
-    };
     return report;
   });
 }
@@ -262,20 +296,34 @@ export function formatReplay(r: ReplayReport): string {
     const c = s.counts;
     const detail =
       s.status === "na-env"
-        ? s.note ?? "could not run here"
+        ? s.note ?? s.results.map((r) => r.reason).find((x) => x) ?? "could not run here"
         : `${c.pass} pass, ${c.fail} fail` + (c.quarantine ? `, ${c.quarantine} quarantined` : "") + (c.na ? `, ${c.na} n/a` : "");
     lines.push(`  ${mark[s.status]} ${s.commit.sha.slice(0, 8)}  ${(s.commit.date || "").slice(0, 10)}  ${detail}  ${s.commit.subject}`);
   }
 
-  if (r.pinpoint) {
+  if (r.transitions.length > 0) {
     lines.push("");
-    lines.push(
-      `transition between ${r.pinpoint.window[0]} and ${r.pinpoint.window[1]}, halved in ${r.pinpoint.probes} probes:`
-    );
-    lines.push(`  first bad commit: ${r.pinpoint.firstBad.sha}  ${r.pinpoint.firstBad.subject}`);
-  } else if (r.samples.some((s) => s.status === "fail")) {
-    lines.push("");
-    lines.push("no pass -> fail transition inside this range (the earliest sample already fails)");
+    lines.push(`transitions (${r.transitions.length}):`);
+    for (const t of r.transitions) {
+      lines.push(
+        `  ${t.kind === "broke" ? "broke" : "fixed"}  at ${t.commit.sha.slice(0, 8)}  ` +
+          `${JSON.stringify(t.commit.subject.slice(0, 40))}  ` +
+          `${t.kind === "broke" ? "pass -> fail" : "fail -> pass"}, halved in ${t.probes} probe${t.probes === 1 ? "" : "s"}` +
+          ` (between ${t.window[0]} and ${t.window[1]})`
+      );
+    }
+    for (const t of r.transitions) {
+      if (t.kind === "broke") lines.push(`  first bad commit: ${t.commit.sha}  ${t.commit.subject}`);
+    }
+  } else {
+    const seen = new Set(r.samples.filter((s) => s.status === "pass" || s.status === "fail").map((s) => s.status));
+    if (seen.size === 1) {
+      lines.push("");
+      lines.push(
+        `no transition inside this range — every usable sample ${seen.has("fail") ? "fails" : "passes"}.` +
+          ` Widen the range, or sample more densely if a boundary could be hiding between two probes.`
+      );
+    }
   }
 
   const envSkipped = r.samples.filter((s) => s.status === "na-env").length;

@@ -13,10 +13,18 @@ heuristic test-suite
   run      node --test ratchet/dist/test/
   timeout  600000
   applies  when ratchet/dist/test exists
+  measure  status  exit code
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   rule     failing is 0
-  rule     passing is at least 159
+  rule     passing is at least 193
+  rule     status is one of 0, 1
+  rejects  failing 1
+  rejects  passing 192
+  rejects  status 7
+  note     the exit code is measured so that a red suite is judged by its own
+  note     counts -- "failing measured 1" -- instead of short-circuiting as a
+  note     broken instrument, which is what a nonzero exit means otherwise
   because  a suite that shrinks silently is how a ratchet stops ratcheting: the
   because  count is a floor, raised deliberately, never lowered by accident
 
@@ -45,6 +53,8 @@ heuristic cli-end-to-end
   rule     failures is 0
   rule     declared is at least 13
   rule     ran is at least 1
+  rejects  failures 1
+  rejects  declared 12
   note     each scenario names the guarantee it drives, so a red line is a
   note     sentence about the tool rather than a line number in the driver
   because  the loop in the README -- init, fmt, adopt, verify, break it,
@@ -64,6 +74,8 @@ heuristic cli-errors-are-messages
   rule     silent is 0
   rule     homes is 3
   rule     probed is at least 8
+  rejects  traces 1
+  rejects  silent 1
   because  a stack trace means the failure reached the top of the program
   because  unhandled, so nothing decided what it meant, and the reader learns
   because  the line number of a JSON.parse instead of which file to fix
@@ -75,7 +87,9 @@ heuristic source-uniformity
   measure  violations  count of lines matching "VIOLATION "
   measure  declared  number after "invariants declared:"
   rule     violations is 0
-  rule     declared is at least 5
+  rule     declared is at least 6
+  rejects  violations 1
+  rejects  declared 5
   because  partial application of a mechanism -- defined once, wired into some
   because  of its call sites -- has shipped four times in three versions, and a
   because  corpus row cannot catch it: a row is one counterexample and this is

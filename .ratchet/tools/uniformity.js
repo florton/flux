@@ -53,6 +53,7 @@ const DECLARED = [
   "setup-carries-the-home",
   "setup-runner-is-single",
   "setup-follows-every-checkout",
+  "proof-tiers-reach-every-report",
 ];
 
 const violations = [];
@@ -109,6 +110,19 @@ function braceSpan(source, open) {
   for (let i = open; i < source.length; i++) {
     if (source[i] === "{") depth++;
     else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  return null;
+}
+
+/** The `( ... )` span starting at `open`, inclusive, or null if unbalanced. */
+function parenSpan(source, open) {
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === "(") depth++;
+    else if (source[i] === ")") {
       depth--;
       if (depth === 0) return source.slice(open, i + 1);
     }
@@ -310,6 +324,58 @@ function setupFollowsEveryCheckout() {
 
 /* -------------------------------------------------------------------------- */
 
+/**
+ * I6. Every report of a proof asks for both tiers.
+ *
+ * v0.9 split "validated" into two ordered proofs — against history, and
+ * against a declared counterexample — and `subjectProofs()` is the one place
+ * that decides which a subject has. `yieldReport()` takes them as an option,
+ * and a caller that omits it falls back to the older, coarser answer: every
+ * subject with any proof reads as "validated against history".
+ *
+ * That is the same shape as every other invariant in this file, and it
+ * shipped broken during the very session that added it — `ratchet yield`
+ * reported `test-suite` as validated against history while `ratchet guard`,
+ * three lines away in the same run, reported it as validated against a
+ * declared counterexample. One reader disagreeing with another about the
+ * strength of a proof is worse than either answer alone.
+ */
+function proofReportsAskForBothTiers() {
+  const files = fs.existsSync(SRC) ? fs.readdirSync(SRC).filter((f) => f.endsWith(".ts")) : [];
+  if (files.length === 0) return skip("proof-tiers-reach-every-report", "ratchet/src does not exist at this commit");
+  if (!fs.existsSync(path.join(SRC, "proof.ts"))) {
+    return skip("proof-tiers-reach-every-report", "the two proof tiers do not exist at this commit");
+  }
+
+  const sites = [];
+  for (const file of files) {
+    const source = code(read(file));
+    for (const m of source.matchAll(/yieldReport\s*\(/g)) {
+      // The whole argument list, paren-matched. Reaching for "the first `{`
+      // after the call" instead finds the closing paren of a nested call
+      // first and yields an empty span, which reads as a violation on a call
+      // site that is perfectly correct.
+      const open = source.indexOf("(", m.index);
+      sites.push({ file, args: open === -1 ? "" : parenSpan(source, open) ?? "" });
+    }
+  }
+  if (sites.length === 0) return skip("proof-tiers-reach-every-report", "nothing in this tree reports subject yield");
+
+  apply("proof-tiers-reach-every-report");
+  for (const site of sites) {
+    // `yield.ts` is the definition, not a call site.
+    if (site.file === "yield.ts") continue;
+    if (/\bproofs\b/.test(site.args)) continue;
+    violate(
+      "proof-tiers-reach-every-report",
+      `${site.file} calls yieldReport() without \`proofs\` — it would report every proven subject as ` +
+        `"validated against history", including subjects whose only proof is a declared counterexample`
+    );
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+
 if (!fs.existsSync(SRC)) {
   console.log(`n/a: no ratchet/src at this commit (looked in ${path.relative(root, SRC) || SRC})`);
   process.exit(125);
@@ -320,6 +386,7 @@ try {
   spawnPathsSubstitute();
   setupCarriesHome();
   setupFollowsEveryCheckout();
+  proofReportsAskForBothTiers();
 } catch (err) {
   console.log(`uniformity scan crashed: ${err && err.stack ? err.stack : String(err)}`);
   process.exit(1);

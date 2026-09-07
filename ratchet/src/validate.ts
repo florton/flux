@@ -5,6 +5,7 @@ import { appendJournal, readJournal } from "./journal";
 import { ruleHash } from "./rule";
 import { commitInfo, runSetup, withWorktree } from "./worktree";
 import { loadSubjects } from "./paths";
+import { subjectProofs } from "./proof";
 import type { RatchetConfig } from "./types";
 
 export interface ValidateOptions {
@@ -119,19 +120,18 @@ export async function validate(cwd: string, subject: string, opts: ValidateOptio
 }
 
 /**
- * Subjects with a recorded validation for their *current* rule. Editing a
- * check changes its hash, so its validation no longer applies — the proof is
- * tied to the instrument it was proven against.
+ * Subjects with *some* proof they can fail, for the rule they run under now.
+ *
+ * Two proofs count, and `proof.ts` is where the difference is kept: a
+ * recorded validation against a known bug, or a declared counterexample the
+ * rules were shown to refuse. This set is the capture gate's question — "has
+ * this been proven at all" — and it deliberately does not distinguish them.
+ * Every place that *reports* a proof asks `subjectProofs` instead, because a
+ * bare "validated" would put the two tiers back together again.
  */
 export function validatedSubjects(cwd: string, ratchetDir: string, config: RatchetConfig): Set<string> {
-  const journal = readJournal(path.join(ratchetDir, "journal.jsonl"));
-  const valid = new Set<string>();
-  for (const [name, subj] of Object.entries(config.subjects)) {
-    const rule = ruleHash(name, subj, cwd);
-    const needle = `validated "${name}" (rule ${rule})`;
-    if (journal.some((j) => j.kind === "validation" && j.text.startsWith(needle))) valid.add(name);
-  }
-  return valid;
+  const proofs = subjectProofs(cwd, ratchetDir, config);
+  return new Set([...proofs.values()].filter((p) => p.tier !== "none").map((p) => p.subject));
 }
 
 export function formatValidate(r: ValidateResult): string {

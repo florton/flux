@@ -22,10 +22,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { loadHeuristics, formatProblems, RULES_FILE } from "./heuristic-config";
-import { evaluateHeuristic, type Observation } from "./evaluate";
+import { evaluateHeuristic, excerpt, type Observation } from "./evaluate";
 import { tokenize } from "./runner";
 import { substituteArgv, substituteShell, type Substitutions } from "./substitution";
-import { NA_EXIT_CODE, type RatchetConfig } from "./types";
+import { NA_ENV_EXIT_CODE, NA_EXIT_CODE, type RatchetConfig } from "./types";
 import { summarize, type Heuristic } from "./heuristics";
 
 function out(msg: string, code: number): never {
@@ -38,6 +38,7 @@ function out(msg: string, code: number): never {
 function pass(m: string): never { return out(m, 0); }
 function fail(m: string): never { return out(m, 1); }
 function na(m: string): never { return out(m, NA_EXIT_CODE); }
+function naEnv(m: string): never { return out(m, NA_ENV_EXIT_CODE); }
 
 function readStdin(): unknown {
   let raw = "";
@@ -179,6 +180,18 @@ function main(): void {
     }
   }
 
+  // And the other half of what `na` used to mean. `applies when` says the
+  // subject is absent; `needs` says the environment is. Reporting the second
+  // as a failure is how dependency rot turns into a manufactured regression.
+  for (const rel of h!.needsExists) {
+    if (!fs.existsSync(path.resolve(cwd, rel))) {
+      naEnv(
+        `could not run here: "${name}" needs ${rel}, which is not present —` +
+          ` that is a fact about this environment, not about the code at this commit`
+      );
+    }
+  }
+
   // The probe is spawned by the ratchet, which exports both paths. During
   // replay RATCHET_HOME is the *carried* home, so an instrument reached
   // through {home} is the same one at every commit.
@@ -193,17 +206,25 @@ function main(): void {
   if (observed.exitCode === NA_EXIT_CODE) {
     na(`n/a: \`${h!.run}\` reported not-applicable${observed.stdout.trim() ? ` — ${observed.stdout.trim().split("\n")[0]}` : ""}`);
   }
+  // The instrument's own way of saying the second thing: it ran, discovered
+  // that this environment cannot produce a measurement, and said so instead
+  // of returning a number nobody should trust.
+  if (observed.exitCode === NA_ENV_EXIT_CODE) {
+    naEnv(
+      `could not run here: \`${h!.run}\` reported that this environment cannot measure this commit` +
+        (observed.stdout.trim() ? ` — ${observed.stdout.trim().split("\n")[0]}` : "")
+    );
+  }
 
   const measuresExit = h!.measures.some((m) => m.extractor.kind === "exit-code");
   if (observed.exitCode !== 0 && !measuresExit) {
     // Reading numbers out of a crashed command is reading noise. Unless the
     // heuristic explicitly measures the exit code, a nonzero one means the
     // instrument broke, and that is a different message than a failed rule.
-    const detail = (observed.stderr.trim() || observed.stdout.trim() || "(no output)")
-      .split(/\r?\n/).slice(0, 4).join(" | ").slice(0, 400);
     fail(
-      `\`${h!.run}\` exited ${observed.exitCode} before any rule could be checked: ${detail}\n` +
-        `    if a nonzero exit is expected here, measure it: \`measure status exit code\``
+      `\`${h!.run}\` exited ${observed.exitCode} before any rule could be checked: ` +
+        excerpt(observed.stderr.trim() || observed.stdout.trim()) +
+        `\n    if a nonzero exit is expected here, measure it: \`measure status exit code\``
     );
   }
 

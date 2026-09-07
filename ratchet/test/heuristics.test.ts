@@ -8,7 +8,7 @@ import {
   canonicalizeClause, parseHeuristics, formatHeuristics, renderHeuristic,
   formatProblem, nearest, PREDICATE_PHRASES,
 } from "../src/heuristics";
-import { extract, judge, evaluateHeuristic, describePredicate } from "../src/evaluate";
+import { extract, judge, evaluateHeuristic, describePredicate, checkRejection, excerpt } from "../src/evaluate";
 import { loadSubjects } from "../src/paths";
 import { runCheck } from "../src/runner";
 import { toSubject, loadHeuristics } from "../src/heuristic-config";
@@ -231,7 +231,9 @@ test("extract: a missing label says what the command actually printed", () => {
   const r = extract("e", { kind: "number-after", label: "house edge:" }, obs("all good\nnothing here\n"));
   assert.equal(r.value, null);
   assert.match(r.error!, /no "house edge:" in the output/);
-  assert.match(r.error!, /the command printed: "all good", "nothing here"/);
+  // One separator for every excerpt in the tool, so the shape reads the same
+  // whether it is two lines of output or the two ends of two hundred.
+  assert.match(r.error!, /the command printed: "all good" \| "nothing here"/);
 });
 
 test("extract: a label present but numberless says so distinctly", () => {
@@ -846,4 +848,364 @@ test("an unsubstituted {home} is a spawn failure, not a silent pass", () => {
   const observed = observe(h, project, null, {}, {});
   const failed = "spawnError" in observed || (observed as { exitCode: number }).exitCode !== 0;
   assert.ok(failed, "a heuristic whose instrument could not be found must not report a reading");
+});
+
+/* -------------------------------------------------------------------------- */
+/* Declared rejections — proof without history                                 */
+/* -------------------------------------------------------------------------- */
+
+test("a declared rejection the rules refuse parses clean and is recorded", () => {
+  const h = one(
+    `heuristic monty-hall
+  run      node deal.js
+  measure  keep  number after "Keep wins:"
+  rule     keep is between 3200000 and 3500000
+  rejects  keep 5000000
+  because  Monty Hall is 1/3 keep and 2/3 switch, an outside truth
+`
+  );
+  assert.equal(h.rejects.length, 1);
+  assert.deepEqual(h.rejects[0], {
+    kind: "reading",
+    measure: "keep",
+    value: "5000000",
+    line: 5,
+    // The same body column every other clause reports: the keyword's end
+    // plus one, whatever the author's alignment.
+    column: 11,
+    text: "keep 5000000",
+  });
+  const check = checkRejection(h, h.rejects[0]);
+  assert.equal(check.ok, true);
+  assert.match(check.refusedBy[0], /keep measured 5000000/);
+});
+
+test("a declared rejection the rules ACCEPT is a parse error with a line and a column", () => {
+  // A proof that does not prove anything is caught the same way a clause that
+  // does not parse is. Without this the second proof tier would be a comment.
+  const r = parseHeuristics(
+    `heuristic bad
+  run      node x.js
+  measure  keep  number after "Keep wins:"
+  rule     keep is between 3200000 and 3500000
+  rejects  keep 3300000
+`
+  );
+  assert.equal(r.problems.length, 1);
+  assert.equal(r.problems[0].line, 5);
+  assert.equal(r.problems[0].column, 11);
+  assert.match(r.problems[0].message, /every rule accepts it/);
+  assert.match(formatProblem("heuristics.rules", r.problems[0]), /heuristics\.rules:5:11/);
+});
+
+test("a rejection naming a measure with no rule about it is refused", () => {
+  const r = parseHeuristics(
+    `heuristic h
+  run      node x.js
+  measure  keep   number after "Keep:"
+  measure  other  number after "Other:"
+  rule     other is 1
+  rejects  keep 5
+`
+  );
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0].message, /no rule says anything about keep/);
+});
+
+test("a rejection judged only by relational rules says to use the output form", () => {
+  const r = parseHeuristics(
+    `heuristic rel
+  run      node x.js
+  measure  a  number after "A:"
+  measure  b  number after "B:"
+  rule     a is above b
+  rejects  a 1
+`
+  );
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0].message, /one reading does not settle the verdict/);
+});
+
+test("rejects output runs the whole pipeline against a fabricated reading", () => {
+  const h = one(
+    `heuristic monty-hall
+  run      node deal.js
+  measure  change  the first number after "Win percent:"
+  measure  keep    the second number after "Win percent:"
+  rule     change is above keep
+  rejects  output "Win percent: 33.3\\nWin percent: 66.6"
+`
+  );
+  assert.equal(h.rejects.length, 1);
+  assert.equal(h.rejects[0].kind, "output");
+  const check = checkRejection(h, h.rejects[0]);
+  assert.equal(check.ok, true, check.problem);
+  assert.match(check.refusedBy[0], /change measured 33\.3 and keep measured 66\.6/);
+});
+
+test("a fabricated output the extractors cannot read is not a proof", () => {
+  // "The extractor found nothing" would otherwise pass for a proof that the
+  // band discriminates, which is exactly the vacuity the gate exists to catch.
+  const r = parseHeuristics(
+    `heuristic weak
+  run      node x.js
+  measure  keep  number after "Keep wins:"
+  rule     keep is between 1 and 5
+  rejects  output "total nonsense"
+`
+  );
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0].message, /no rule ever judged it/);
+  assert.match(r.problems[0].message, /proves nothing about the rules/);
+});
+
+test("rejects survives a fmt round trip", () => {
+  const source = `heuristic h
+  run      node x.js
+  measure  f  number after "findings:"
+  rule     f is 0
+  rejects  f 1
+  rejects  output "findings: 9"
+`;
+  const parsed = parseHeuristics(source);
+  assert.deepEqual(parsed.problems, []);
+  const rendered = formatHeuristics(parsed.heuristics);
+  const again = parseHeuristics(rendered);
+  assert.deepEqual(again.problems, []);
+  assert.equal(formatHeuristics(again.heuristics), rendered, "canonical form is a fixed point");
+  assert.equal(again.heuristics[0].rejects.length, 2);
+});
+
+test("a rejects clause does not move the rule hash", () => {
+  // The hash says what a row is pinned to, and a declared rejection changes
+  // neither what is measured nor how it is judged. Folding it in would
+  // quarantine every row in a repository the moment somebody strengthened a
+  // proof — punishing exactly the behavior the second tier exists to invite.
+  const dir = tmpDir();
+  const before = one(`heuristic h\n  run node x.js\n  measure f number after "f:"\n  rule f is 0\n`);
+  const after = one(`heuristic h\n  run node x.js\n  measure f number after "f:"\n  rule f is 0\n  rejects f 1\n`);
+  assert.equal(ruleHash("h", toSubject(before), dir), ruleHash("h", toSubject(after), dir));
+
+  const moved = one(`heuristic h\n  run node x.js\n  measure f number after "f:"\n  rule f is 1\n  rejects f 0\n`);
+  assert.notEqual(ruleHash("h", toSubject(before), dir), ruleHash("h", toSubject(moved), dir));
+});
+
+/* -------------------------------------------------------------------------- */
+/* The nth match, and comparing two measures                                   */
+/* -------------------------------------------------------------------------- */
+
+test("an extractor can read the nth appearance of a label", () => {
+  const e = { kind: "number-after", label: "Win percent:", occurrence: 2 } as const;
+  assert.equal(extract("keep", e, obs("Win percent: 33.3\nWin percent: 66.6")).value, 66.6);
+  const missing = extract("keep", e, obs("Win percent: 33.3"));
+  assert.equal(missing.value, null);
+  assert.match(missing.error!, /fewer than 2 "Win percent:" in the output/);
+});
+
+test("the ordinal is parsed, canonicalized and rendered back", () => {
+  const h = one(
+    `heuristic h
+  run      node x.js
+  measure  keep  the second number after "Win percent:"
+  rule     keep is above 0
+`
+  );
+  assert.deepEqual(h.measures[0].extractor, {
+    kind: "number-after",
+    label: "Win percent:",
+    occurrence: 2,
+  });
+  assert.match(renderHeuristic(h), /2nd number after "Win percent:"/);
+  // A mismatched suffix is spelling, not a refusal: fmt snaps it.
+  const sloppy = one(`heuristic h\n  run node x.js\n  measure k 2st number after "X:"\n  rule k is 0\n`);
+  assert.match(renderHeuristic(sloppy), /2nd number after/);
+});
+
+test("a comparison can name another measure instead of a number", () => {
+  // The natural rule for Monty Hall is "change is above keep". The vocabulary
+  // had `is the same as` and nothing else, so the only way to write it was to
+  // band the raw counts against the instrument's iteration count — coupling a
+  // rule that is always true to a number that is free to change.
+  const h = one(
+    `heuristic h
+  run      node x.js
+  measure  change  number after "change:"
+  measure  keep    number after "keep:"
+  rule     change is above keep
+`
+  );
+  assert.deepEqual(h.rules[0].predicate, { kind: "compare", op: "above", measure: "keep" });
+  assert.equal(describePredicate(h.rules[0].predicate), "is above keep");
+  assert.equal(evaluateHeuristic(h, obs("change: 66\nkeep: 33")).failure, null);
+  assert.match(
+    evaluateHeuristic(h, obs("change: 33\nkeep: 66")).failure!,
+    /change measured 33 and keep measured 66/
+  );
+});
+
+test("a comparison against a measure that does not exist is a parse error", () => {
+  const r = parseHeuristics(
+    `heuristic h
+  run      node x.js
+  measure  a  number after "a:"
+  rule     a is above b
+`
+  );
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0].message, /needs a number or another measure/);
+});
+
+test("an unreadable measure on the far side of a comparison is named once", () => {
+  const h = one(
+    `heuristic h
+  run      node x.js
+  measure  change  number after "change:"
+  measure  keep    number after "keep:"
+  rule     change is above keep
+`
+  );
+  const e = evaluateHeuristic(h, obs("change: 66"));
+  assert.deepEqual(e.unreadable, ["keep"]);
+  assert.deepEqual(e.ruleFailures, [], "the rule is not judged twice over a number nobody could read");
+  assert.match(e.failure!, /keep could not be measured: no "keep:" in the output/);
+});
+
+test("monty-hall is expressible as it is meant to be read", () => {
+  // The acceptance case for the vocabulary work: two `Win percent:` readings
+  // and `change is above keep`, with no dependence on the iteration count —
+  // and a declared rejection standing in for a bug this repository never had.
+  const h = one(
+    `heuristic monty-hall
+  run      node deal.js
+  measure  keep    the first number after "Win percent:"
+  measure  change  the second number after "Win percent:"
+  rule     change is above keep
+  rule     change is between 65 and 68
+  rejects  output "Win percent: 66.6\\nWin percent: 33.3"
+  because  Monty Hall is 1/3 keep and 2/3 switch, an outside truth that does
+  because  not depend on any of this code being right
+`
+  );
+  assert.equal(evaluateHeuristic(h, obs("Win percent: 33.34\nWin percent: 66.66")).failure, null);
+  assert.match(
+    evaluateHeuristic(h, obs("Win percent: 66.66\nWin percent: 33.34")).failure!,
+    /change measured 33\.34 and keep measured 66\.66/
+  );
+  assert.equal(checkRejection(h, h.rejects[0]).ok, true);
+});
+
+/** Write one heuristic into a scratch ratchet home and return the home path. */
+function writeRules(h: { name: string }): string {
+  const home = tmpDir();
+  fs.writeFileSync(path.join(home, "config.json"), JSON.stringify({ subjects: {} }), "utf8");
+  fs.writeFileSync(path.join(home, "heuristics.rules"), renderHeuristic(h as never) + "\n", "utf8");
+  return home;
+}
+
+test("`needs <path> exists` reports could-not-run, not not-applicable", () => {
+  // The two jobs `na` used to do at once. `applies when` says the subject is
+  // absent at this commit; `needs` says the environment is — and only the
+  // first is a statement about the code under test.
+  const h = one(
+    `heuristic sim
+  run      node sim.js
+  applies  when src/sim.c exists
+  needs    node_modules exists
+  measure  count number after "particles:"
+  rule     count is 65536
+`
+  );
+  assert.deepEqual(h.appliesWhenExists, ["src/sim.c"]);
+  assert.deepEqual(h.needsExists, ["node_modules"]);
+  assert.match(renderHeuristic(h), /needs +node_modules exists/);
+
+  const project = tmpDir();
+  fs.mkdirSync(path.join(project, "src"), { recursive: true });
+  fs.writeFileSync(path.join(project, "src", "sim.c"), "", "utf8");
+  const run = spawnSync(
+    process.execPath,
+    [path.join(__dirname, "..", "src", "probe.js"), "sim"],
+    {
+      cwd: project,
+      encoding: "utf8",
+      // RATCHET_PROJECT_ROOT is set explicitly, not inherited: when this suite
+      // itself runs as a heuristic's instrument the outer probe exports it,
+      // and a child probe prefers it over its own cwd. Found by the ratchet's
+      // own standing invariant on its first green run.
+      env: { ...process.env, RATCHET_HOME: writeRules(h), RATCHET_PROJECT_ROOT: project },
+    }
+  );
+  assert.equal(run.status, 126, run.stdout + run.stderr);
+  assert.match(run.stdout, /needs node_modules/);
+  assert.match(run.stdout, /not about the code at this commit/);
+});
+
+test("a `needs` path that is present lets the check run normally", () => {
+  const h = one(
+    `heuristic sim
+  run      ${JSON.stringify(NODE)} -e "console.log('particles: 4')"
+  needs    present.txt exists
+  measure  count number after "particles:"
+  rule     count is 4
+`
+  );
+  const project = tmpDir();
+  fs.writeFileSync(path.join(project, "present.txt"), "", "utf8");
+  const run = spawnSync(
+    process.execPath,
+    [path.join(__dirname, "..", "src", "probe.js"), "sim"],
+    {
+      cwd: project,
+      encoding: "utf8",
+      // RATCHET_PROJECT_ROOT is set explicitly, not inherited: when this suite
+      // itself runs as a heuristic's instrument the outer probe exports it,
+      // and a child probe prefers it over its own cwd. Found by the ratchet's
+      // own standing invariant on its first green run.
+      env: { ...process.env, RATCHET_HOME: writeRules(h), RATCHET_PROJECT_ROOT: project },
+    }
+  );
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+});
+
+test("`needs` with no path says what the clause reads", () => {
+  const r = parseHeuristics(`heuristic h\n  run node x.js\n  measure f number after "f:"\n  rule f is 0\n  needs\n`);
+  assert.equal(r.problems.length, 1);
+  assert.match(r.problems[0].message, /needs <path> exists/);
+  assert.match(r.problems[0].message, /different from .applies when/);
+});
+
+test("an excerpt shows both ends of what a crashed instrument printed", () => {
+  // The head alone is the wrong half. A test runner opens with a banner and
+  // puts the verdict at the end, so four leading lines of a TAP stream made
+  // the witness for a failing suite read `TAP version 13 | # Subtest: ... |
+  // ok 1 - ...` — technically the output, and useless.
+  const tap = [
+    "TAP version 13",
+    "# Subtest: junit: CDATA, message-less text, errors capture",
+    "ok 1 - junit: CDATA, message-less text, errors capture",
+    ...Array.from({ length: 38 }, (_, i) => `ok ${i + 2} - filler`),
+    "not ok 41 - the one that actually broke",
+    "# tests 41",
+    "# pass 40",
+    "# fail 1",
+  ].join("\n");
+
+  const e = excerpt(tap);
+  assert.match(e, /TAP version 13/, "the head is still there");
+  assert.match(e, /not ok 41 - the one that actually broke/, "and so is the line that matters");
+  assert.match(e, /# fail 1/);
+  assert.match(e, /…37 more lines…/, "and it says how much was dropped");
+
+  assert.equal(excerpt(""), "(no output)");
+  assert.equal(excerpt("one\ntwo"), "one | two", "short output is shown whole");
+  assert.match(excerpt("x".repeat(400)), /…$/, "and a single enormous line is clipped");
+  assert.match(excerpt("a\nb", { quote: true }), /"a" \| "b"/, "a short preview quotes each line");
+});
+
+test("an unreadable measure quotes both ends of the output too", () => {
+  const h = one(`heuristic h\n  run node x.js\n  measure f number after "findings:"\n  rule f is 0\n`);
+  const noisy = Array.from({ length: 30 }, (_, i) => `line ${i}`).concat("the last word").join("\n");
+  const e = evaluateHeuristic(h, obs(noisy));
+  assert.match(e.failure!, /line 0/);
+  assert.match(e.failure!, /the last word/);
 });

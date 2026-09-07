@@ -8,6 +8,7 @@ import { failureSignature, signaturesMatch } from "./signature";
 import { ruleHash } from "./rule";
 import { loadSubjects } from "./paths";
 import { explainRuleChange } from "./heuristic-history";
+import { standingSubjects, subjectProofs } from "./proof";
 import type { Heuristic } from "./heuristics";
 
 export interface VerifyOptions {
@@ -84,7 +85,19 @@ export async function verify(cwd: string, opts: VerifyOptions): Promise<VerifyRe
     return h;
   };
 
-  const results = await pool(rows, opts.concurrency ?? defaultConcurrency(), async (row): Promise<VerifyResult> => {
+  // Standing invariants: subjects a declared rejection has proven, with no
+  // row to carry them. `verify` enforces rows *union* standing invariants —
+  // the tool has had both natures since `replay --subjects` and had simply
+  // never named the second, so a never-failed invariant had no way to enforce
+  // at all. Skipped when a single row was asked for by id: that question is
+  // about one counterexample, not about the gate.
+  const proofs = subjectProofs(cwd, ratchetDir, config);
+  const rowed = new Set(rows.filter((r) => r.input === null).map((r) => r.subject));
+  const standing = opts.row
+    ? []
+    : standingSubjects(config, proofs, rowed).filter((n) => !opts.subject || n === opts.subject);
+
+  const rowResults = await pool(rows, opts.concurrency ?? defaultConcurrency(), async (row): Promise<VerifyResult> => {
     try {
       const { command, input, shell, timeoutMs, testName, homeDir } = resolveCheck(config, row, ratchetDir);
       const res = await runCheckAsync(command, input, { cwd, shell, timeoutMs, testName, homeDir });
@@ -122,19 +135,64 @@ export async function verify(cwd: string, opts: VerifyOptions): Promise<VerifyRe
     }
   });
 
+  const standingResults = await pool(standing, opts.concurrency ?? defaultConcurrency(), async (name): Promise<VerifyResult> => {
+    const subj = config.subjects[name];
+    try {
+      const res = await runCheckAsync(subj.check, null, {
+        cwd,
+        shell: subj.shell,
+        timeoutMs: subj.timeoutMs,
+        homeDir: ratchetDir,
+        projectRoot: cwd,
+      });
+      return {
+        id: name,
+        subject: name,
+        kind: "standing",
+        outcome: res.outcome === "quarantine" ? "fail" : res.outcome,
+        pass: res.outcome === "pass",
+        reason: res.reason,
+      };
+    } catch (err) {
+      return {
+        id: name,
+        subject: name,
+        kind: "standing",
+        outcome: "fail",
+        pass: false,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
+  const results = [...rowResults, ...standingResults];
+
   if (opts.json) {
     console.log(JSON.stringify({ results, counts: countOutcomes(results) }, null, 2));
   } else if (!opts.quiet) {
-    printResults(results, new Map(rows.map((r) => [r.id, r])), { cwd, ratchetDir, config });
+    printResults(results, new Map(rows.map((r) => [r.id, r])), {
+      cwd, ratchetDir, config, declaredSubjects: Object.keys(config.subjects).length,
+    });
   }
   return results;
 }
 
-export function countOutcomes(results: VerifyResult[]): { pass: number; fail: number; na: number; quarantine: number } {
+/** Rows and standing invariants, kept apart: they measure different things. */
+export function splitResults(results: VerifyResult[]): { rows: VerifyResult[]; standing: VerifyResult[] } {
+  return {
+    rows: results.filter((r) => r.kind !== "standing"),
+    standing: results.filter((r) => r.kind === "standing"),
+  };
+}
+
+export function countOutcomes(results: VerifyResult[]): {
+  pass: number; fail: number; na: number; naEnv: number; quarantine: number;
+} {
   return {
     pass: results.filter((r) => r.outcome === "pass").length,
     fail: results.filter((r) => r.outcome === "fail").length,
     na: results.filter((r) => r.outcome === "na").length,
+    naEnv: results.filter((r) => r.outcome === "na-env").length,
     quarantine: results.filter((r) => r.outcome === "quarantine").length,
   };
 }
@@ -143,16 +201,44 @@ interface PrintContext {
   cwd: string;
   ratchetDir: string;
   config: { subjects: Record<string, { heuristic?: Heuristic }> };
+  /** How many subjects this repository declares, for the empty-gate warning. */
+  declaredSubjects?: number;
+}
+
+/**
+ * A gate that is green while checking nothing.
+ *
+ * `verify` on an empty corpus prints "0/0 rows pass" and exits 0. That is
+ * right for a freshly initialized home and wrong for a repository that
+ * declares subjects and has armed none of them — and it is not hypothetical:
+ * a v0.7 note recorded that `verify` and twenty-one other commands resolved
+ * `--home` identically when checked by hand. They did, because the check ran
+ * against an empty corpus where both routes answer "0/0 rows pass". With one
+ * row they disagreed, and the disagreement reddened every row in the corpus.
+ * A defect was written down as "not a defect" because the gate was green over
+ * nothing.
+ */
+export function emptyGateWarning(results: VerifyResult[], declaredSubjects: number): string | undefined {
+  if (results.length > 0 || declaredSubjects === 0) return undefined;
+  return (
+    `this repository declares ${declaredSubjects} subject(s) and has no armed rows and no standing invariants` +
+    ` — nothing was checked, and a green tick here means only that there was nothing to check.\n` +
+    `  arm one against your own history:  ratchet adopt <subject> --good <an-old-ref>\n` +
+    "  or prove one without history:      add a `rejects <measure> <value>` line to its heuristic"
+  );
 }
 
 function printResults(results: VerifyResult[], byId: Map<string, RowState>, ctx?: PrintContext): void {
-  for (const r of results) {
+  const { rows: rowResults, standing } = splitResults(results);
+  for (const r of rowResults) {
     const row = byId.get(r.id);
     const shown = row ? ` ${inputString(row)}` : "";
     if (r.outcome === "pass") {
       console.log(`✓ ${r.id} ${r.subject}`);
     } else if (r.outcome === "na") {
       console.log(`− ${r.id} ${r.subject}${shown} — n/a: ${r.reason}`);
+    } else if (r.outcome === "na-env") {
+      console.log(`∅ ${r.id} ${r.subject}${shown} — could not run here: ${r.reason}`);
     } else if (r.outcome === "quarantine") {
       console.log(`? ${r.id} ${r.subject}${shown} — quarantined: ${r.reason}`);
       // "rule fd59 became a3b1" tells a reviewer nothing. When the subject is
@@ -169,14 +255,38 @@ function printResults(results: VerifyResult[], byId: Map<string, RowState>, ctx?
       console.log(`✗ ${r.id} ${r.subject}${shown} — ${r.reason ?? "failed"}${drift}`);
     }
   }
-  const { pass, fail, na, quarantine } = countOutcomes(results);
-  const parts = [`${pass}/${results.length} rows pass`];
+  // Standing invariants are printed as their own block and counted
+  // separately. They are not counterexamples and the catch rate is a
+  // statement about counterexamples, so merging the two numbers would make
+  // both of them mean less.
+  for (const r of standing) {
+    if (r.outcome === "pass") console.log(`✓ ${r.subject} — standing invariant holds`);
+    else if (r.outcome === "na") console.log(`− ${r.subject} — standing invariant n/a: ${r.reason}`);
+    else if (r.outcome === "na-env") console.log(`∅ ${r.subject} — standing invariant could not run here: ${r.reason}`);
+    else console.log(`✗ ${r.subject} — standing invariant broken: ${r.reason ?? "failed"}`);
+  }
+
+  const { pass, fail, na, naEnv, quarantine } = countOutcomes(rowResults);
+  const parts = [`${pass}/${rowResults.length} rows pass`];
   if (fail) parts.push(`${fail} failing`);
   if (quarantine) parts.push(`${quarantine} quarantined`);
   if (na) parts.push(`${na} n/a`);
+  if (naEnv) parts.push(`${naEnv} could not run here`);
+  if (standing.length > 0) {
+    const s = countOutcomes(standing);
+    parts.push(
+      `${s.pass}/${standing.length} standing invariants hold` +
+        (s.fail ? `, ${s.fail} broken` : "") +
+        (s.na ? `, ${s.na} n/a` : "") +
+        (s.naEnv ? `, ${s.naEnv} could not run here` : "")
+    );
+  }
   console.log(`\n${parts.join(", ")}`);
 
-  const staleRule = results.filter((r) => r.ruleChanged && r.outcome === "pass").length;
+  const empty = emptyGateWarning(results, ctx?.declaredSubjects ?? 0);
+  if (empty) console.log(empty);
+
+  const staleRule = rowResults.filter((r) => r.ruleChanged && r.outcome === "pass").length;
   if (staleRule > 0) {
     console.log(
       `${staleRule} passing row(s) are pinned to an older version of their rule — \`ratchet reaffirm\` to re-pin them`
@@ -185,13 +295,18 @@ function printResults(results: VerifyResult[], byId: Map<string, RowState>, ctx?
 
   // A gate that is mostly "not applicable" is green while checking almost
   // nothing, which is the quietest way for this tool to become theatre.
-  if (results.length > 0 && na / results.length > 0.5) {
+  // Both kinds of "no verdict" count here: a gate that is green while
+  // checking nothing is the quietest way for this tool to become theatre,
+  // and it does not matter which of the two reasons produced the silence.
+  if (rowResults.length > 0 && (na + naEnv) / rowResults.length > 0.5) {
     console.log(
-      `${na} of ${results.length} rows reported n/a — most of this gate is not checking anything here`
+      `${na + naEnv} of ${rowResults.length} rows returned no verdict` +
+        (naEnv ? ` (${na} n/a, ${naEnv} could not run here)` : "") +
+        ` — most of this gate is not checking anything here`
     );
   }
 
-  const drifted = results.filter((r) => r.outcome === "fail" && r.signatureDrift).length;
+  const drifted = rowResults.filter((r) => r.outcome === "fail" && r.signatureDrift).length;
   if (drifted > 0) {
     console.log(
       `${drifted} failing for a different reason than captured — check whether the row still describes the bug it was created for`

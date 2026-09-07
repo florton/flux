@@ -107,18 +107,50 @@ export interface JournalEvent {
  * silently greening it would be the exact false pass this tool exists to
  * prevent.
  *
+ * `na-env` — the check could not run *here*, for a reason that is about the
+ * environment rather than about the code (exit code 126). `na` and `na-env`
+ * are both "no verdict", and they are the two jobs `na` used to do at once:
+ * "this feature did not exist yet" and "today's toolchain cannot build that
+ * commit" mean opposite things about the commit under test, and collapsing
+ * them manufactures regressions out of dependency rot. `replay --setup`
+ * already made the distinction for setup failures; nothing let a *check* make
+ * it, so every scripted instrument grew its own three-way split by hand.
+ *
  * `quarantine` — the check failed, but under a rule that has been edited
  * since the row was captured. The heuristic moved, so the failure is routed
  * to review rather than treated as a regression. It does not fail the build;
  * `ratchet reaffirm` or `ratchet accept` resolves it.
  */
-export type CheckOutcome = "pass" | "fail" | "na" | "quarantine";
+export type CheckOutcome = "pass" | "fail" | "na" | "na-env" | "quarantine";
 
 export const NA_EXIT_CODE = 125;
+
+/**
+ * "This environment cannot run the check here."
+ *
+ * 126 is the shell's own code for "found but not executable", which is the
+ * same claim, so the collision points the same way rather than a misleading
+ * one. In shell mode a shell that cannot execute the command will therefore
+ * report `na-env` rather than a failure — loudly, because a subject that
+ * reports no verdict at every commit trips the "most of this gate is not
+ * checking anything" warning on its first run.
+ */
+export const NA_ENV_EXIT_CODE = 126;
 
 export interface VerifyResult {
   id: string;
   subject: string;
+  /**
+   * What produced this result.
+   *
+   * `row` — a counterexample out of the corpus: this exact input once broke.
+   * `standing` — a heuristic proven by a declared rejection, enforcing as
+   * itself with no row behind it. The corpus is memory of things that
+   * happened; a standing invariant is a claim about the tree, and forcing it
+   * to impersonate a counterexample would put a line in the corpus that never
+   * occurred. Defaults to `row` so existing readers are unchanged.
+   */
+  kind?: "row" | "standing";
   outcome: CheckOutcome;
   /** True only for outcome "pass". Kept so callers read as before. */
   pass: boolean;
