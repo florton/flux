@@ -8,7 +8,8 @@ source code was touched.
 
 These ran against **v0**. The defects that review later found in that version
 are in [ISSUES_RATCHET.md](ISSUES_RATCHET.md); the readings below stand, but
-the prototype they were taken with has since been rebuilt through v0.4.
+the prototype they were taken with has since been rebuilt through v0.8.
+Experiment 2 has been re-run against v0.8 — see the section under it.
 
 Check contract everywhere: read one JSON object on stdin, exit 0 = pass,
 nonzero = fail, stdout = the reason.
@@ -111,6 +112,102 @@ band, a wrong anchor): every reading would share the same error. That is the
 bootstrapping problem from question 4 applied to history — mitigated by the
 subject-validation protocol (a subject that passes through a known bug is too
 weak) and the checks-of-checks layer.
+
+### Re-run against v0.8 (2026-09-07)
+
+Same repository, same four subjects, same bands, same seed. What changed is
+the prototype: everything in *Design changes these experiments demand* below
+has since been built, and this is the reading that says whether it paid off.
+
+**The plumbing is gone.** The v0 run needed a project-local
+`tools/ratchet-check.js` (77 lines) and a `tools/seed.js` (9 lines) to say
+four things, plus 16 lines of `config.json` pointing at them. Every one of the
+four was the same shape — run a command, pull a number out of what it printed,
+assert the number sits in a band. That shape is the vocabulary now:
+
+| | v0 | v0.8 |
+|---|---|---|
+| hand-written JavaScript | **86 lines** | **0** |
+| configuration | 16 lines of JSON | 3 lines of JSON |
+| the subjects themselves | (inside the script) | 64 lines of prose, 30 of them clauses |
+| `tools/` referenced | yes | not at all |
+
+The JavaScript did not vanish so much as move: the probe and the seeded-RNG
+preload ship with the ratchet, reviewed once, instead of being rewritten per
+project. That is the review-ratio argument in one repository — and it is worth
+noting that the v0 field experiments found every check bug in exactly the 86
+lines that no longer exist.
+
+**The reading reproduces exactly.** `ratchet adopt basic-edge --good 61a9920`,
+one command where v0 needed hand-rolled bash:
+
+```
+  ✗ d3298721  texas gpt          edge measured -0.0764581, rule says "edge is between -0.03 and 0.015"
+  ✓ 94405eb1  Fix three simulator bugs, put decisions on the EV scale
+  ✓ bf8bb22a  Deal from a real shoe with a cut card
+  ✓ 75c199b5  Texas hold'em: real betting logic and correct hand ranking
+  ✓ 48562a2c  Condition the solver on the hole-card check, and count the shoe
+  ✓ e5f6e6d3  Merge remote-tracking branch 'origin/master'
+  ✓ 35515172  texas holdem sim
+  ✓ 69673701  personality types
+
+first failing probed commit: d3298721 "texas gpt"
+captured c74c11d9f4cf1 pinned to the current rule
+validated: it fails where the bug lived and passes where it was fixed
+```
+
+−0.0764581 against the −0.0765 recorded in the v0 run, from the same seed
+through the same mulberry32 — the bundled preload turns out to be the same
+generator the experiment hand-rolled. The fix boundary is the same commit.
+`solver-grade` reads **−0.0764581 as well**, reproducing the v0 note that the
+pre-fix solver-grade failure was the push bug again rather than the TypeError.
+
+**Two differences worth recording.**
+
+*The traversal is narrower.* v0's hand-rolled replay walked every commit and
+reported `2f0e313` failing alongside `d329872`. v0.8 follows `--first-parent`
+across the merge at `e5f6e6d`, and `2f0e313` sits on the merged-in side, so it
+is never probed. One fewer sample, the same conclusion; the range is a
+mainline, which is the assumption bisect needs to be sound.
+
+*Two of the four subjects are now refused.* `monty-hall` and `texas-selfcheck`
+pass at every commit in the range, so `adopt` declines to arm them:
+
+```
+"monty-hall" passes at every probed commit between 61a9920 and HEAD. Nothing
+to adopt: either this history never had the problem, or the heuristic is too
+weak to see it. A heuristic that cannot fail anywhere in your history has not
+been proven to catch anything.
+```
+
+v0 counted all four as working subjects. v0.8 counts two, and says why. That
+is the validation protocol arriving at a stricter — and correct — answer about
+the same evidence: a check that has never been shown able to fail is a green
+light over nothing, whatever it is guarding. Both remain in the rules file as
+standing invariants, listed `UNVALIDATED` by `ratchet yield`, enforcing
+nothing until something proves they can fail.
+
+**What the vocabulary still cannot say.** `monty-hall` is the one subject that
+did not translate cleanly, and it is direct evidence for item 2 of
+[NEXT_STEPS_V3.md](NEXT_STEPS_V3.md):
+
+- The natural reading is the *second* `Win percent:` in the output of
+  `deal.js`. An extractor anchored to a label takes the first match, and there
+  is no way to say "the second one".
+- The natural rule is `change is above keep` — a comparison between two
+  measures. The vocabulary has `is the same as <measure>` and nothing else.
+
+Both have workarounds: anchor on the unique labels (`Keep wins:`,
+`Change wins:`), band the raw counts instead of the percentages, and pin the
+denominator with `total is 10000000`. It works, and it is worse — the band is
+now coupled to the instrument's iteration count, so changing the simulation's
+size would falsify a rule that is still true. The `note` clauses in the rules
+file record that, since the vocabulary cannot.
+
+**Cost.** The full gate — four subjects, two armed rows, integrity, canonical
+form and validation — runs in **1.6 s** on this repository. The nine-commit
+adopt took 3m44s, almost all of it the pre-fix commits, where `blackjack.js`
+ignored its CLI arguments and simulated 10M hands instead of 300k.
 
 ---
 
@@ -310,14 +407,17 @@ agent to investigate — the loop that happened naturally in these experiments
 
 ## Design changes these experiments demand
 
-- Bundle the probe check kind + seeded-RNG preload into ratchet (config-only
-  checks for the 80% case).
-- `ratchet replay <range>` as a first-class command (was hand-rolled in bash).
-- A third check outcome: `na` (not applicable at this commit) distinct from
-  pass — replay and branch gates need it.
-- Corpus rows carry the measured witness (the −0.0765), not just the reason.
-- History commands operate in a worktree, never the user's checkout.
-- Subject-validation protocol: prove each subject fails on one known past bug.
+All six are built as of v0.8, and the Experiment 2 re-run above is the reading
+that exercises them end to end.
+
+| Demanded | Built |
+|---|---|
+| Bundle the probe check kind + seeded-RNG preload (config-only checks for the 80% case) | v0.7 — and the odds re-run needed **no project JavaScript at all**, not merely less |
+| `ratchet replay <range>` as a first-class command (was hand-rolled bash) | v0.4, joined in v0.7 by `ratchet adopt`, which is the whole replay-find-capture-validate loop in one command |
+| A third check outcome: `na`, distinct from pass | v0.4. Still doing two jobs — "did not apply here" and "could not run here" — which is item 3 of NEXT_STEPS_V3 |
+| Corpus rows carry the measured witness, not just the reason | v0.4 for scripted rows; v0.7 for prose rows, where the witness is the measured number in the words of the rule that rejected it |
+| History commands operate in a worktree, never the user's checkout | v0.4 |
+| Subject-validation protocol: prove each subject fails on one known past bug | v0.7, and promoted from convention to a **capture gate**. In the re-run it refused two of the four subjects — the first time the protocol has changed an experiment's verdict |
 
 ## Caveats
 
