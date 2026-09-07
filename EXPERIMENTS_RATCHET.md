@@ -9,7 +9,8 @@ source code was touched.
 These ran against **v0**. The defects that review later found in that version
 are in [ISSUES_RATCHET.md](ISSUES_RATCHET.md); the readings below stand, but
 the prototype they were taken with has since been rebuilt through v0.8.
-Experiment 2 has been re-run against v0.8 — see the section under it.
+Experiments 2 and 4 have been re-run against v0.8 — see the sections under
+them. They disagree usefully about what the prose form is worth.
 
 Check contract everywhere: read one JSON object on stdin, exit 0 = pass,
 nonzero = fail, stdout = the reason.
@@ -297,6 +298,107 @@ the same exact answer.
   the arms fails it at that commit, and bisect names the commit — the
   "regression between versions" question answered with the project's own
   instrument.
+
+### Re-run against v0.8 (2026-09-07)
+
+Same repository, same four subjects, same bands. This is the case where the
+instrument *cannot* become prose — compiling the sim out of the checked-out
+source, integrating 65,536 particles for 360 steps and taking a Fourier
+amplitude is arbitrary computation — so it is the useful counterweight to the
+odds re-run, where the plumbing vanished entirely.
+
+**The readings reproduce.** `galaxy-structure` sampled every 4th commit:
+
+```
+$ ratchet replay --good 3982e36 --every 4 --subjects --subject galaxy-structure \
+      --setup "node {home}/tools/prepare.cjs"
+replay: 6 of 20 commits (every 4 commits)
+range contains merges — following first-parent
+
+  ✗ 1b9c46c0  spiral                          0 pass, 1 fail
+  ✗ 3b89381f  Update README.md                0 pass, 1 fail
+  ✗ b1cafc14  bug fix and add slider to disc  0 pass, 1 fail
+  ✓ 5a3afbcf  non determinism                 1 pass, 0 fail
+  ✓ fab82b70  fix blur on tilt view           1 pass, 0 fail
+  ✓ 95c2db95  smoke v3                        1 pass, 0 fail
+```
+
+A(m=2) reads 2.8e-3 to 4.7e-3 through the fixed-potential era against the
+2.8e-3 the v0 run recorded, and 1.05e-2 at 4.06x the measured floor at HEAD
+against v0's 1.05e-2 at 4.1x. Probing the window commit by commit puts the
+boundary at **`9f53b4d` "widescreen refactor"** — the same commit v0's
+hand-rolled halving found.
+
+**The halving did not happen.** v0's headline result for this experiment was
+that sampling plus halving pinpointed that commit for 36% of the dense cost.
+v0.8 declines:
+
+```
+no pass -> fail transition inside this range (the earliest sample already fails)
+```
+
+`replay` pinpoints a **regression** and nothing else — the code comment is
+explicit ("Only a pass -> fail transition is pinpointed"), and the search walks
+forward for a `pass` followed by a `fail`. Particles' boundary is the other
+direction: the galaxy *gained* its arms, so the transition is fail → pass, a
+*fix*. `bisect` has the same orientation, and it needs `--good` to be an
+ancestor of `--bad`, which a fix boundary is not. So the one mechanism this
+experiment exists to demonstrate is, in the shipped tool, unavailable for half
+of the transitions it could be pointed at. Closing the three-commit window by
+hand took two probes and confirmed v0's answer — which is exactly the manual
+work `replay` was built to remove.
+
+**The frozen instrument was not frozen.** The v0 write-up lists "Frozen
+instrument. The check script is pinned across every commit" as one of three
+guards on instrument integrity. For particles that was not true: the config
+pointed at `tools/ratchet-check.cjs`, which is **untracked**, so it existed
+only in the working checkout — which worked because v0's replay checked
+commits out *in place*. v0.4 stopped doing that (history commands run in a
+worktree, never the user's checkout) and a worktree has no `tools/`. Reaching
+the instrument through `{home}` makes the claim true rather than incidental,
+and it is only expressible in prose at all because v0.8 taught the probe to
+substitute the token.
+
+**Prose did not make this smaller. It made it separable.** Counting
+non-comment lines:
+
+| | v0 | v0.8 |
+|---|---|---|
+| instrument (JavaScript) | 132 lines, judgment mixed in | 148 lines, measurement only |
+| worktree setup (JavaScript) | none needed | 26 lines |
+| judgment | 18 bands, inside the script | 14 `rule` clauses over 16 `measure`s |
+| total | **132 lines of code** | **174 lines of code + 61 of prose** |
+
+That is a real cost, and the direction is the opposite of odds, where 86 lines
+of JavaScript became none. Three things drive it: the setup script exists only
+because worktree isolation does; the instrument grew because it now *reports*
+eight physics measurements it used to compute and discard; and the vocabulary
+charges a `measure` line per reading where a script just uses a variable —
+sixteen measures to support fourteen rules.
+
+What was bought for those lines is not economy:
+
+- the eighteen bands are fourteen sentences someone who knows the physics can
+  read and change without touching JavaScript, which is the difference between
+  writing characteristics and writing instruments;
+- the instrument is genuinely frozen, as above;
+- a failing row names *every* clause that failed. At `b1cafc1` the witness
+  reads `signal measured 0.0027743 ... ; ratio measured 0.5116 ...`, where the
+  v0 script returned on the first band it tripped.
+
+**The economics depend on the shape of the subject**, and two experiments is
+enough to say which way: where a subject is "run something, read a number,
+band it", prose removes all of the code (odds, 86 → 0). Where it needs real
+computation, prose adds a layer and pays for reviewability and freezing, not
+for size. The v0 closing note predicted the split between generic and
+domain-specific subjects; this is the same split measured in lines.
+
+**Cost.** Six sampled commits took 2m07s; the four-commit dense window 2m02s.
+`physics-sanity` is 48 s a probe on its own — it compiles the sim and runs
+65,536 particles for 300 steps twice, to check determinism. `galaxy-structure`
+is armed and validated; the other three subjects have no historical failure to
+prove them and stay `UNVALIDATED`, enforcing nothing, exactly as odds'
+`monty-hall` and `texas-selfcheck` do.
 
 ---
 
