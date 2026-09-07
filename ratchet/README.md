@@ -500,3 +500,7 @@ From the design in [../RATCHET.md](../RATCHET.md), still absent:
   catalogue snapshot sets).
 - **Metric budgets** in their baseline-relative form, and static checks.
 - The PR bot and agent attach. `--json` exists; nothing consumes it yet.
+
+The prioritized plan for what comes next — heuristics as config, validation
+as a capture gate, `ratchet adopt`, yield reporting, and the merge-landscape
+glue — is [../NEXT_STEPS_V2.md](../NEXT_STEPS_V2.md).

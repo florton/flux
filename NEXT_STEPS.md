@@ -1,5 +1,9 @@
 # Ratchet — Next Steps
 
+> **Superseded as the plan by [NEXT_STEPS_V2.md](NEXT_STEPS_V2.md).** This
+> file remains the v0-era record: requirements each backed by an observed
+> failure.
+
 Consolidates the four field experiments (margin, odds, newportfolio, particles),
 the six questions they answer, and what the prototype must become next. The
 experiment detail lives in `EXPERIMENTS_RATCHET.md`; this file is the plan.
