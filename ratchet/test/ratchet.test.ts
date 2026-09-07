@@ -12,7 +12,7 @@ import { failureSignature } from "../src/signature";
 import { capture } from "../src/capture";
 import { verify } from "../src/verify";
 import { accept, reopen } from "../src/accept";
-import { report } from "../src/report";
+import { report, reportData } from "../src/report";
 import { bisect } from "../src/bisect";
 
 function tmpDir(): string {
@@ -183,6 +183,15 @@ test("R2: an accepted counterexample that recurs is reported, not swallowed", as
     assert.equal(reopened.recurred[0].reopened, true);
     assert.equal(rows(home)[0].status, "active");
     assert.equal((await verify(root, { quiet: true, ratchetHome: home }))[0].pass, false);
+
+    // Every recurrence is journaled — reopening is a choice, remembering is
+    // not — and the journal entry is what the churn report rates.
+    const entries = readJournal(path.join(home, "journal.jsonl"));
+    assert.equal(
+      entries.filter((e) => e.kind === "recurrence").length,
+      2,
+      "one recurrence entry per match, with or without --reopen"
+    );
   });
 });
 
@@ -473,5 +482,39 @@ test("capture, dedup, verify, accept, reopen, report", async () => {
     assert.match(text, /1 rows/);
     assert.match(text, /fast-check 1/);
     assert.match(text, /reopened: 1/);
+  });
+});
+
+test("report splits failure signals into corpus-caught vs. novel", async () => {
+  const { home, root } = project(
+    { s: { check: `"${NODE}" check.js`, captureProperty: "p" } },
+    `if (v === 42) fail("boom on 42");`
+  );
+  const capFile = path.join(root, "cap.json");
+  fs.writeFileSync(capFile, JSON.stringify([{ property: "p", counterexample: [42] }]), "utf8");
+
+  await withHome(home, async () => {
+    // Nothing has been observed yet: there is no rate to report.
+    let d = reportData(root);
+    assert.equal(d.catchRateThisWeek, null);
+    assert.equal(d.catchRateAllTime, null);
+    assert.match(report(root), /none recorded/);
+
+    capture(root, [capFile]); // a novel counterexample
+    const id = rows(home)[0].id;
+    accept(root, id, "intended for now", "alice");
+    capture(root, [capFile]); // the same input returns — caught by corpus
+
+    d = reportData(root);
+    assert.equal(d.newThisWeek, 1, "the first capture of an id is a novel bug");
+    assert.equal(d.caughtThisWeek, 1, "a recurrence is a regression the corpus already knew");
+    assert.equal(d.catchRateThisWeek, 50);
+    assert.equal(d.novelAllTime, 1);
+    assert.equal(d.caughtAllTime, 1);
+
+    const text = report(root);
+    assert.match(text, /caught by corpus: 1  \(50%\) — known regressions, the ratchet worked/);
+    assert.match(text, /new counterexamples: 1 — novel bugs/);
+    assert.match(text, /all-time: 1 caught, 1 new \(50%\)/);
   });
 });

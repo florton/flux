@@ -14,8 +14,8 @@ Regression memory for AI-assisted development. The design sketch is
 > v0.6 works the adoption gaps: the ratchet's **own corpus is populated** (the
 > five v0 defects captured at the commit where they lived and re-pinned to
 > today's instrument), capture gains a **TAP source** and a hardier JUnit
-> parser, and `replay` probes history on **parallel worktrees** (`--jobs`).
-> 69 tests.
+> parser, `replay` probes history on **parallel worktrees** (`--jobs`), and
+> `report` rates failure signals as **caught-by-corpus vs. novel**. 70 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; everything is a file git already knows how to commit.
@@ -45,11 +45,67 @@ $ ratchet verify --home "$MEM/.ratchet"   # today's corpus, old code
 
 `ratchet bisect` does the carrying for you.
 
+## The workflow — preventing regressions with the ratchet
+
+The ratchet is a loop, not a one-time setup. The order below is the order of
+leverage; each step names the section that details it.
+
+1. **Wire once, keep the instrument frozen.** `ratchet init`, then write
+   checks as `node {home}/tools/probe.js <subject>` — `{home}` resolves to
+   the ratchet home, which history commands carry out of the working tree,
+   so `replay` and `bisect` measure every commit with the same script (see
+   "The frozen instrument"). Declare `owns` for the measuring scripts; a
+   subject without `owns` cannot tell you when its instrument was edited
+   (see "The owning rule, and quarantine").
+2. **Validate before you trust.** `ratchet validate <subject> --known-bad
+   <sha> --known-good <sha>` — a subject that passes through a known bug is
+   too weak to watch anything, and the proof is journaled against the rule
+   hash it was proven under (see "Validating a subject").
+3. **Capture rides the same PR as the fix.** Point a fast-check reporter,
+   JUnit XML, or TAP at `ratchet capture` on red CI runs and commit the new
+   rows alongside the fix. Discrimination, the confirmation runs, and
+   cause-preserving minimization happen at capture — flakes never enter the
+   corpus (see "Capture sources").
+4. **Gate every merge with `ratchet verify`.** Rows are checked in parallel
+   by default (`--jobs N` to tune). Rule unchanged and row fails → hard
+   block. Rule edited and row fails → quarantine → review, then `reaffirm`
+   (the expectation stands under the new instrument) or `accept` (it does
+   not).
+5. **Never re-derive an expectation silently.** Intended behavior changes go
+   through the ceremony: `accept <id> --reason "..."`, then re-`record` the
+   visual baseline if there is one. The recurrence gate means a retired
+   expectation that fails again is loud and red, not deduplicated away (see
+   "The accept ceremony").
+6. **Start retroactively, don't grow from zero.** On adoption, run
+   `ratchet replay --good v1 --subjects --every week --jobs 8` to draw the
+   pass/fail curve of today's checks over your own history, and `ratchet
+   bisect` the transitions worth a name. The first run produces a report,
+   not a requirement — the corpus compounds from every fix after that (see
+   "Replay across history" and "Bisect").
+7. **Watch the number that ends arguments.** `ratchet report` splits every
+   failure signal that reached capture into what the corpus already knew
+   (recurrences of retired rows — memory working) and genuinely novel
+   counterexamples:
+
+   ```
+   failure signals this week: 12
+     caught by corpus: 9  (75%) — known regressions, the ratchet worked
+     new counterexamples: 3 — novel bugs
+   all-time: 21 caught, 9 new (70%)
+   ```
+
+   If the caught share is high, memory is working; if every failure is new,
+   the code is churning faster than it is learning.
+
+The meta-rule behind all seven: humans and models *propose* — heuristics,
+pins, accepts — and deterministic machinery *disposes* — discrimination,
+verification, replay. The division is the product.
+
 ## Commands
 
 ```
 ratchet init                      create .ratchet/ with a config template
-ratchet capture <file...>         add counterexamples (fast-check capture JSON or junit.xml)
+ratchet capture <file...>         add counterexamples (fast-check capture JSON, junit.xml, or .tap)
                                   [--reopen] put retired rows back when they recur
 ratchet verify [--row id] [--subject name] [--quiet] [--jobs N]
 ratchet list [--status active|archived] [--subject name]
@@ -443,5 +499,4 @@ From the design in [../RATCHET.md](../RATCHET.md), still absent:
 - **Sampled behavioral diffs** beyond the visual pins (corpus + boundary
   catalogue snapshot sets).
 - **Metric budgets** in their baseline-relative form, and static checks.
-- The churn report's catch-rate vs. new-bug split (`report` prints counts).
 - The PR bot and agent attach. `--json` exists; nothing consumes it yet.

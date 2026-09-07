@@ -14,10 +14,11 @@
 > JUnit, and TAP. And the ratchet's **own corpus is populated**: the five v0
 > defects were captured at the commit where they lived and re-pinned to
 > today's instrument, so `ratchet verify` enforces them on every commit of
-> this repository. Still design-only: mining deleted tests (mode 2), semantic
-> history (mode 3), sampled behavioral diffs beyond visual pins, metric
-> budgets, and static checks. `ratchet/README.md` carries the current line
-> between them.
+> this repository. `ratchet report` rates failure signals as caught-by-corpus
+> vs. novel — the churn number from the design. Still design-only: mining
+> deleted tests (mode 2), semantic history (mode 3), sampled behavioral diffs
+> beyond visual pins, metric budgets, and static checks.
+> `ratchet/README.md` carries the current line between them.
 
 ---
 

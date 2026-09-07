@@ -362,8 +362,22 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
         acceptedReason: existing.lastReason,
         reopened: false,
       };
+      const at = new Date().toISOString();
+      // A recurrence is the corpus catching a regression against a decision
+      // someone already made — the event the churn report rates. It is
+      // always journaled, even when the row stays retired: reopening is a
+      // choice, remembering is not.
+      appendJournal(journalPath, {
+        at,
+        kind: "recurrence",
+        actor: opts.actor ?? "ratchet",
+        text:
+          `counterexample matched a row retired ${existing.lastAt} by ${existing.lastActor ?? "unknown"}` +
+          ` (${existing.lastReason ?? "no reason recorded"}) — it is failing again: ${reason}`,
+        corpusId: id,
+        commit,
+      });
       if (opts.reopen) {
-        const at = new Date().toISOString();
         appendEvent(corpusPath, {
           op: "reopen",
           id,

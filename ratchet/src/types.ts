@@ -82,7 +82,7 @@ export interface LineProblem {
 
 export interface JournalEvent {
   at: string;
-  kind: "decision" | "accept" | "note" | "validation";
+  kind: "decision" | "accept" | "note" | "validation" | "recurrence";
   actor: string;
   text: string;
   corpusId?: string;
