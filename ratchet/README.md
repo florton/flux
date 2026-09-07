@@ -284,6 +284,22 @@ carries a permanent green light over nothing. It is also the load-bearing
 safety mechanism for *generated* coverage heuristics, which arrive in bulk and
 are exactly the kind that pass through every bug.
 
+> **Known limitation, and the next thing to be fixed.** Proof today means
+> proof *from history*, and that turns away a check which has never failed
+> because the property it guards has never been violated — the standing
+> invariant, which is the most valuable kind. Re-running the field experiments
+> against v0.8 refused **five of eight** real subjects on these grounds:
+> Monty Hall is 2/3 whatever this repository's history says, particle count
+> must equal capacity, the mode constants must index their own table, the tree
+> must build. Nor is it only a matter of strictness: `verify` enforces rows,
+> `adopt` will not capture a row where nothing fails, and `capture` skips a
+> counterexample whose check passes now — so such a subject has no path to
+> enforcing at all. A library for stopping regressions cannot require that the
+> regression have already happened. The fix — a declared counterexample as a
+> second, weaker, always-available tier of proof, and a home for the standing
+> invariant beside the corpus — is item 1 of
+> [NEXT_STEPS_V4.md](../NEXT_STEPS_V4.md).
+
 The proof is recorded against the rule hash it was proven under, so **editing a
 check invalidates its own validation**. "Validated once" never means "trusted
 forever".
