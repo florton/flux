@@ -1,7 +1,7 @@
 import * as path from "path";
 import { verify } from "./verify";
 import { runCheckAsync } from "./runner";
-import { commitRange, withWorktree } from "./worktree";
+import { commitRange, runSetup, withWorktree } from "./worktree";
 
 export interface BisectOptions {
   /** Command run inside the worktree before each probe (e.g. "npm ci"). */
@@ -41,17 +41,7 @@ export async function bisect(
       probes++;
       session.checkout(sha);
       if (opts.setup) {
-        const s = await runCheckAsync(opts.setup, null, {
-          cwd: session.path,
-          shell: true,
-          timeoutMs: 600_000,
-          // The setup script needs the carried home for the same reason the
-          // check does: a build script added last month does not exist in a
-          // worktree checked out at a commit from last year, so `{home}` must
-          // resolve outside the tree being measured.
-          homeDir: session.home,
-          projectRoot: session.path,
-        });
+        const s = await runSetup(session, opts.setup);
         if (s.outcome !== "pass") throw new Error(`setup failed at ${sha.slice(0, 8)}: ${s.reason}`);
       }
       const results = await verify(session.path, { row: id, quiet: true, ratchetHome: session.home });

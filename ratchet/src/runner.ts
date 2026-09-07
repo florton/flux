@@ -2,6 +2,7 @@ import { spawn, spawnSync, SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { NA_EXIT_CODE, type CheckOutcome } from "./types";
+import { substituteArgv, substituteShell } from "./substitution";
 
 export interface RunOptions {
   cwd: string;
@@ -147,17 +148,9 @@ function invocation(command: string, input: unknown, opts: RunOptions): Invocati
     // Without this, a `--setup` script written as `node {home}/tools/build.js`
     // is looked for inside the worktree, where a script added last month does
     // not exist at a commit from last year.
-    let shellCommand = command;
-    for (const [token, value] of [["{home}", opts.homeDir], ["{ratchet}", ratchetBin]] as const) {
-      if (value === undefined || !shellCommand.includes(token)) continue;
-      // A path that could close a quote or open a substitution would change
-      // the shape of the command rather than filling a slot in it.
-      if (/["`$\r\n]/.test(value)) {
-        return fail(`cannot substitute ${token}: the path contains a shell metacharacter (${value})`);
-      }
-      shellCommand = shellCommand.split(token).join(value);
-    }
-    return { exe: shellCommand, args: [], options: { ...options, shell: true } };
+    const substituted = substituteShell(command, { home: opts.homeDir, ratchet: ratchetBin });
+    if ("error" in substituted) return fail(substituted.error);
+    return { exe: substituted.command, args: [], options: { ...options, shell: true } };
   }
 
   let argv: string[];
@@ -173,10 +166,7 @@ function invocation(command: string, input: unknown, opts: RunOptions): Invocati
   if (opts.testName !== undefined) {
     argv = argv.map((t) => (t.includes("{test}") ? t.split("{test}").join(opts.testName!) : t));
   }
-  if (opts.homeDir !== undefined) {
-    argv = argv.map((t) => (t.includes("{home}") ? t.split("{home}").join(opts.homeDir!) : t));
-  }
-  argv = argv.map((t) => (t.includes("{ratchet}") ? t.split("{ratchet}").join(ratchetBin) : t));
+  argv = substituteArgv(argv, { home: opts.homeDir, ratchet: ratchetBin });
   const exe = resolveExecutable(argv[0], opts.cwd);
   if (/\.(cmd|bat)$/i.test(exe)) {
     return fail(

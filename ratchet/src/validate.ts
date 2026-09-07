@@ -3,7 +3,7 @@ import * as path from "path";
 import { runCheckAsync } from "./runner";
 import { appendJournal, readJournal } from "./journal";
 import { ruleHash } from "./rule";
-import { commitInfo, withWorktree } from "./worktree";
+import { commitInfo, runSetup, withWorktree } from "./worktree";
 import { loadSubjects } from "./paths";
 import type { RatchetConfig } from "./types";
 
@@ -59,17 +59,7 @@ export async function validate(cwd: string, subject: string, opts: ValidateOptio
     const probe = async (sha: string) => {
       session.checkout(sha);
       if (opts.setup) {
-        const s = await runCheckAsync(opts.setup, null, {
-          cwd: session.path,
-          shell: true,
-          timeoutMs: 600_000,
-          // The setup script needs the carried home for the same reason the
-          // check does: a build script added last month does not exist in a
-          // worktree checked out at a commit from last year, so `{home}` must
-          // resolve outside the tree being measured.
-          homeDir: session.home,
-          projectRoot: session.path,
-        });
+        const s = await runSetup(session, opts.setup);
         if (s.outcome !== "pass") throw new Error(`setup failed at ${sha.slice(0, 8)}: ${s.reason}`);
       }
       return runCheckAsync(subj.check, input, {

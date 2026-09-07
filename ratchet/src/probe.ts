@@ -24,6 +24,7 @@ import { spawnSync } from "child_process";
 import { loadHeuristics, formatProblems, RULES_FILE } from "./heuristic-config";
 import { evaluateHeuristic, type Observation } from "./evaluate";
 import { tokenize } from "./runner";
+import { substituteArgv, substituteShell, type Substitutions } from "./substitution";
 import { NA_EXIT_CODE, type RatchetConfig } from "./types";
 import { summarize, type Heuristic } from "./heuristics";
 
@@ -63,7 +64,8 @@ export function observe(
   h: Heuristic,
   cwd: string,
   input: unknown,
-  extraEnv: Record<string, string>
+  extraEnv: Record<string, string>,
+  paths: Substitutions = {}
 ): Observation | { spawnError: string } {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
 
@@ -104,14 +106,20 @@ export function observe(
   type Spawned = { error?: Error; status?: number | null; signal?: string | null; stdout?: string; stderr?: string };
   let result: Spawned;
   if (h.shell) {
-    result = spawnSync(command, [], { ...options, shell: true });
+    // The same frozen-instrument tokens a scripted subject gets. Without
+    // them a prose heuristic could only ever run a script out of the tree it
+    // is measuring, so `run node {home}/tools/e2e.js` — an instrument carried
+    // across history — was expressible in config.json and nowhere in prose.
+    const substituted = substituteShell(command, paths);
+    if ("error" in substituted) return { spawnError: substituted.error };
+    result = spawnSync(substituted.command, [], { ...options, shell: true });
   } else {
     // Tokenized and spawned directly, exactly like a scripted subject: nothing
     // substituted into the command can become shell syntax.
     let argv: string[] = [];
     let tokenizeError: Error | undefined;
     try {
-      argv = tokenize(command);
+      argv = substituteArgv(tokenize(command), paths);
     } catch (err) {
       tokenizeError = err instanceof Error ? err : new Error(String(err));
     }
@@ -171,7 +179,13 @@ function main(): void {
     }
   }
 
-  const observed = observe(h!, cwd, readStdin(), {});
+  // The probe is spawned by the ratchet, which exports both paths. During
+  // replay RATCHET_HOME is the *carried* home, so an instrument reached
+  // through {home} is the same one at every commit.
+  const observed = observe(h!, cwd, readStdin(), {}, {
+    home: home!,
+    ratchet: process.env.RATCHET_BIN ?? __dirname,
+  });
   if ("spawnError" in observed) fail(observed.spawnError);
 
   // The instrument's own exit code propagates n/a, so a `run` command can say

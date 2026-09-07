@@ -3,7 +3,7 @@ import * as path from "path";
 import { verify, countOutcomes } from "./verify";
 import { runCheckAsync, pool } from "./runner";
 import { loadSubjects } from "./paths";
-import { commitRange, environment, withWorktrees, type CommitInfo, type Environment, type Session } from "./worktree";
+import { commitRange, environment, runSetup, withWorktrees, type CommitInfo, type Environment, type Session } from "./worktree";
 import type { RatchetConfig, VerifyResult } from "./types";
 
 export type SamplePolicy = { kind: "dense" } | { kind: "stride"; n: number } | { kind: "period"; unit: "day" | "week" };
@@ -154,16 +154,7 @@ export async function replay(cwd: string, opts: ReplayOptions): Promise<ReplayRe
       // registry can no longer satisfy it. Reporting it as a failure would
       // manufacture regressions out of dependency rot.
       if (opts.setup) {
-        const s = await runCheckAsync(opts.setup, null, {
-          cwd: session.path,
-          shell: true,
-          timeoutMs: 600_000,
-          // A build script added last month does not exist in a worktree
-          // checked out at a commit from last year: `{home}` must resolve to
-          // the carried home, exactly as it does for the check itself.
-          homeDir: session.home,
-          projectRoot: session.path,
-        });
+        const s = await runSetup(session, opts.setup);
         if (s.outcome !== "pass") {
           return {
             commit,

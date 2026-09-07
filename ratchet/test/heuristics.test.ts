@@ -18,6 +18,8 @@ import { installHook, uninstallHook, hookStatus } from "../src/hooks";
 import { yieldReport } from "../src/yield";
 import { renderComment } from "../src/pr-comment";
 import { heuristicVersions, diffCanonical } from "../src/heuristic-history";
+import { substituteArgv, substituteShell } from "../src/substitution";
+import { observe } from "../src/probe";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-h-"));
@@ -792,4 +794,56 @@ test("loadHeuristics on a directory with no rules file is not an error", () => {
   const loaded = loadHeuristics(dir);
   assert.equal(loaded.exists, false);
   assert.deepEqual(loaded.heuristics, []);
+});
+
+/* -------------------------------------------------------------------------- */
+/* The path-token vocabulary, and every spawn path reaching it                 */
+/* -------------------------------------------------------------------------- */
+
+test("substituteArgv fills a token as exactly one argv element", () => {
+  // Whole-token, so a path with a space in it can never split into two
+  // arguments or turn into shell syntax.
+  assert.deepEqual(
+    substituteArgv(["node", "{home}/tools/e2e.js", "{ratchet}/probe.js"], {
+      home: "C:\Program Files\home",
+      ratchet: "/opt/ratchet",
+    }),
+    ["node", "C:\Program Files\home/tools/e2e.js", "/opt/ratchet/probe.js"]
+  );
+});
+
+test("substituteArgv leaves a token alone when nothing binds it", () => {
+  assert.deepEqual(substituteArgv(["node", "{home}/x.js"], {}), ["node", "{home}/x.js"]);
+});
+
+test("substituteShell refuses a path that would change the shape of the command", () => {
+  const evil = substituteShell('echo "{home}"', { home: 'a"b' });
+  assert.ok("error" in evil && /shell metacharacter/.test(evil.error));
+  const fine = substituteShell("node {home}/x.js", { home: "/tmp/h" });
+  assert.deepEqual(fine, { command: "node /tmp/h/x.js" });
+});
+
+test("a prose heuristic reaches an instrument that lives only in the home", () => {
+  // The frozen-instrument mechanism, on the *prose* path. Until v0.8 the
+  // probe substituted neither token, so `run node {home}/tools/audit.js` was
+  // expressible in config.json and nowhere in prose — a heuristic could only
+  // ever run a script out of the tree it was measuring.
+  const home = tmpDir();
+  const project = tmpDir();
+  fs.mkdirSync(path.join(home, "tools"), { recursive: true });
+  fs.writeFileSync(path.join(home, "tools", "audit.js"), 'console.log("findings: 0");', "utf8");
+
+  const h = one(`heuristic carried\n  run ${JSON.stringify(NODE)} "{home}/tools/audit.js"\n  measure f number after "findings:"\n  rule f is 0\n`);
+  const observed = observe(h, project, null, {}, { home, ratchet: __dirname });
+  assert.ok(!("spawnError" in observed), "spawnError" in observed ? observed.spawnError : "");
+  assert.equal((observed as { exitCode: number }).exitCode, 0);
+  assert.match((observed as { stdout: string }).stdout, /findings: 0/);
+});
+
+test("an unsubstituted {home} is a spawn failure, not a silent pass", () => {
+  const project = tmpDir();
+  const h = one(`heuristic carried\n  run ${JSON.stringify(NODE)} "{home}/tools/audit.js"\n  measure f number after "findings:"\n  rule f is 0\n`);
+  const observed = observe(h, project, null, {}, {});
+  const failed = "spawnError" in observed || (observed as { exitCode: number }).exitCode !== 0;
+  assert.ok(failed, "a heuristic whose instrument could not be found must not report a reading");
 });

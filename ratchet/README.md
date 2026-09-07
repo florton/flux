@@ -857,6 +857,17 @@ they tested `minimize` and `foldRows` in isolation, while the defects lived in
 the *capture* path that calls them, so they passed straight through the bug.
 That is the protocol working as intended.
 
+**What these five rows do not cover.** All five are corpus and
+data-structure semantics — fold order, id collision, reduction slippage, dedup
+partitioning, stringify injectivity. They are the defects a scratch corpus and
+a `deepStrictEqual` can reach. Of the twenty-one defects in the v0 review,
+sixteen sat at the process boundary, on the CLI surface, or in the error paths,
+and none of those has a row. So `ratchet verify` passing on this repository
+means five known data-structure bugs have not returned; it does not mean the
+tool is working. The gap, its measurement, and the two subjects that would
+close it are recorded in
+[NEXT_STEPS_V3.md](../NEXT_STEPS_V3.md#the-finding-that-should-shape-v08-the-corpus-is-in-the-wrong-place).
+
 **And one prose heuristic**, in [`../.ratchet/heuristics.rules`](../.ratchet/heuristics.rules):
 
 ```

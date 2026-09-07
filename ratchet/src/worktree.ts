@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { spawnSync } from "child_process";
+import { runCheckAsync, type RunResult } from "./runner";
 
 export interface GitResult {
   status: number;
@@ -127,6 +128,36 @@ export async function withWorktrees<T>(
   } finally {
     removeWorktrees(cwd, created);
   }
+}
+
+/**
+ * Run a `--setup` command against a checked-out session.
+ *
+ * Every history command needs this and each one used to build the call
+ * itself, four near-identical copies of the same five options. They agreed
+ * today; nothing made them agree, and the version that shipped with `homeDir`
+ * missing was how `--setup` lost the ability to say `{home}` at all. The
+ * options that matter are here once:
+ *
+ *   - `shell: true`, because a setup command is a build line — `npm ci && tsc`
+ *     — not an argv;
+ *   - `homeDir`, because a build script added last month does not exist in a
+ *     worktree checked out at a commit from last year, so `{home}` must
+ *     resolve outside the tree being measured, exactly as it does for a check;
+ *   - a ten-minute timeout, because an install is not a check.
+ *
+ * What a failure *means* stays with the caller: dependency rot is `na-env` to
+ * replay, a skipped probe to adopt, and fatal to bisect, which cannot bisect
+ * a range it cannot build.
+ */
+export async function runSetup(session: Session, setup: string): Promise<RunResult> {
+  return runCheckAsync(setup, null, {
+    cwd: session.path,
+    shell: true,
+    timeoutMs: 600_000,
+    homeDir: session.home,
+    projectRoot: session.path,
+  });
 }
 
 export interface CommitInfo {

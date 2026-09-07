@@ -76,8 +76,17 @@ function requireRoot(): string {
   return root;
 }
 
+/**
+ * The one resolver. Every command asks this; nothing reads `--home` itself.
+ *
+ * An empty `RATCHET_HOME` counts as unset, not as "the home is the empty
+ * path". `export RATCHET_HOME=` is how a shell unsets a variable sloppily,
+ * and `??` honored it — every command then failed with
+ * "no .ratchet/config.json found in " and a blank where the path should be.
+ */
 function homeDir(cwd: string): string {
-  return process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
+  const fromEnv = process.env.RATCHET_HOME;
+  return fromEnv !== undefined && fromEnv !== "" ? fromEnv : path.join(cwd, ".ratchet");
 }
 
 interface Args {
@@ -388,7 +397,11 @@ async function main(): Promise<void> {
         subject: flags.get("--subject"),
         quiet: bools.has("--quiet"),
         json,
-        ratchetHome: flags.get("--home"),
+        // The one resolver, like every other command. Reading the raw flag
+        // here was a second route to the same answer — the two agreed, but
+        // nothing made them, and "a mechanism wired into some of its call
+        // sites" is this codebase's most reliable defect.
+        ratchetHome: homeDir(cwd),
         concurrency: jobs ? Math.max(1, parseInt(jobs, 10) || defaultConcurrency()) : undefined,
       });
       break;

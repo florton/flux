@@ -25,7 +25,7 @@ import { runCheckAsync } from "./runner";
 import { failureSignature } from "./signature";
 import { ruleHash } from "./rule";
 import { loadSubjects } from "./paths";
-import { commitInfo, commitRange, withWorktree, type CommitInfo } from "./worktree";
+import { commitInfo, commitRange, runSetup, withWorktree, type CommitInfo } from "./worktree";
 import type { CorpusEvent } from "./types";
 
 export interface AdoptOptions {
@@ -89,17 +89,7 @@ export async function adopt(cwd: string, subject: string, opts: AdoptOptions): P
     const run = async (commit: CommitInfo): Promise<AdoptProbe> => {
       session.checkout(commit.sha);
       if (opts.setup) {
-        const s = await runCheckAsync(opts.setup, null, {
-          cwd: session.path,
-          shell: true,
-          timeoutMs: 600_000,
-          // The setup script needs the carried home for the same reason the
-          // check does: a build script added last month does not exist in a
-          // worktree checked out at a commit from last year, so `{home}` must
-          // resolve outside the tree being measured.
-          homeDir: session.home,
-          projectRoot: session.path,
-        });
+        const s = await runSetup(session, opts.setup);
         if (s.outcome !== "pass") {
           // Dependency rot, not a regression: an old tree today's toolchain
           // can no longer build says nothing about that commit's behavior.
