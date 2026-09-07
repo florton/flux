@@ -9,10 +9,12 @@ import { readJournal } from "../src/journal";
 import { ruleHash, collectOwned } from "../src/rule";
 import { runCheck } from "../src/runner";
 import { capture } from "../src/capture";
+import { proveSubjects } from "./proof";
 import { verify } from "../src/verify";
 import { accept, reaffirm } from "../src/accept";
 import { replay, sample, parsePolicy } from "../src/replay";
 import { validate, validatedSubjects } from "../src/validate";
+import { adopt } from "../src/adopt";
 import { commitRange, type CommitInfo } from "../src/worktree";
 import type { SubjectConfig } from "../src/types";
 
@@ -132,6 +134,7 @@ test("a row whose rule was edited is quarantined, not treated as a regression", 
   fs.writeFileSync(path.join(root, "cap.json"), JSON.stringify([{ property: "p", counterexample: [5] }]), "utf8");
 
   await withHome(home, async () => {
+    proveSubjects(home, root);
     capture(root, [path.join(root, "cap.json")]);
     const row = rows(home)[0];
     assert.ok(row.ruleHash, "capture records the rule that justified the row");
@@ -155,7 +158,7 @@ test("a row whose rule was edited is quarantined, not treated as a regression", 
     assert.equal(res[0].ruleChanged, false);
     assert.throws(() => reaffirm(root, row.id, "again", "alice"), /already pinned/);
 
-    const j = readJournal(path.join(home, "journal.jsonl"));
+    const j = readJournal(path.join(home, "journal.jsonl")).filter((e) => e.kind !== "validation");
     assert.equal(j.length, 1);
     assert.match(j[0].text, /reaffirmed under edited rule/);
   });
@@ -220,6 +223,7 @@ test("a failure must reproduce twice to enter the corpus", async () => {
   fs.writeFileSync(path.join(root, "cap.json"), JSON.stringify([{ property: "p", counterexample: [1] }]), "utf8");
 
   await withHome(home, async () => {
+    proveSubjects(home, root);
     const rep = capture(root, [path.join(root, "cap.json")]);
     assert.equal(rep.added.length, 0, "a flake must not become a permanent row");
     assert.equal(rep.flaky.length, 1);
@@ -247,6 +251,7 @@ test("--confirm 1 opts out of the second run", async () => {
   fs.writeFileSync(path.join(root, "cap.json"), JSON.stringify([{ property: "p", counterexample: [1] }]), "utf8");
 
   await withHome(home, async () => {
+    proveSubjects(home, root);
     assert.equal(capture(root, [path.join(root, "cap.json")], { confirmations: 1 }).added.length, 1);
   });
 });
@@ -489,4 +494,60 @@ test("replay --subjects runs configured subjects, not corpus rows", async () => 
   const subjects = await replay(dir, { good: base, bad: "HEAD", subjects: true, ratchetHome: home });
   assert.ok(subjects.samples.some((x) => x.status === "fail"), "subject mode finds the break");
   assert.ok(subjects.samples.some((x) => x.status === "pass"));
+});
+
+// -------------------------------- adopt: the confirmation probe is prepared too
+
+test("adopt re-runs --setup before the confirmation probe", async () => {
+  // Build output is not tracked, so `git checkout --force` leaves the previous
+  // probe's artifacts in the worktree. `adopt` confirms a failure by checking
+  // the bad commit out a second time; without re-running setup, that
+  // confirmation measures whichever commit was built last — which is the
+  // *fixed* one, since probing walks forward. Every subject with a build step
+  // was therefore reported flaky and refused, and in the other direction a
+  // failure caused by stale artifacts would have been confirmed and stored.
+  const { dir, base } = seedHistory(5, 2, 4);
+  const home = path.join(dir, ".ratchet");
+  const tools = path.join(home, "tools");
+  fs.mkdirSync(tools, { recursive: true });
+
+  // A "build": derive an untracked artifact from the tracked source.
+  fs.writeFileSync(
+    path.join(tools, "build.js"),
+    'require("fs").copyFileSync("lib.js", "built.js");\nconsole.log("built");\n',
+    "utf8"
+  );
+  // A check that reads only the artifact, the way a compiled project's does.
+  fs.writeFileSync(
+    path.join(tools, "check.js"),
+    [
+      'const { double } = require(require("path").resolve("built.js"));',
+      "if (double(21) === 42) process.exit(0);",
+      'console.log("double(21) gave " + double(21) + ", expected 42");',
+      "process.exit(1);",
+    ].join("\n"),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(home, "config.json"),
+    JSON.stringify({ subjects: { built: { check: NODE + " {home}/tools/check.js" } } }),
+    "utf8"
+  );
+
+  const result = await adopt(dir, "built", {
+    good: base,
+    setup: NODE + " {home}/tools/build.js",
+    ratchetHome: home,
+    actor: "test",
+  });
+
+  assert.ok(result.firstFailing, "adopt found no failing commit in a range that contains the bug");
+  assert.match(result.firstFailing!.message, /BREAKS/);
+  assert.deepEqual(
+    result.notes.filter((n) => /flaky/.test(n)),
+    [],
+    "the confirmation probe measured a stale build and called a sound heuristic flaky"
+  );
+  assert.equal(result.captured, true);
+  assert.equal(rows(home).length, 1, "a confirmed failure must enter the corpus");
 });

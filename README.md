@@ -9,15 +9,21 @@ wherever the specification is knowable, and bound it where it cannot move.
   compile-time synthesis step
 - **[RATCHET.md](RATCHET.md)** - The ratchet extracted as a standalone library:
   regression memory for AI-assisted development, shipped first
-- **[ratchet/](ratchet/)** - **v0.4 — built, tested, and self-hosting.** Working
-  CLI: capture with cause-preserving reduction, verify, the accept ceremony,
-  owning-rule hashes with quarantine, replay across history with sampling and
-  halving, subject validation, bisect, fsck. See
-  [ratchet/README.md](ratchet/README.md) and the
+- **[ratchet/](ratchet/)** - **v0.7 — built, tested, self-hosting, and
+  self-enforcing.** Working CLI: heuristics written as prose in a closed
+  vocabulary, capture with cause-preserving reduction and a validation gate,
+  `guard` wired into pre-commit and CI, `adopt` to arm a heuristic against your
+  own history, the accept ceremony, owning-rule hashes with quarantine that
+  names the clause that moved, replay across history with sampling and halving,
+  visual pins, bisect, fsck. See [ratchet/README.md](ratchet/README.md) and the
   [walkthrough](ratchet/demo/README.md).
 - **[EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)** - Four field experiments
   (margin, odds, newportfolio, particles) and the five questions they answer
-- **[NEXT_STEPS.md](NEXT_STEPS.md)** - What those experiments demand of the design
+- **[NEXT_STEPS_V3.md](NEXT_STEPS_V3.md)** - **Current plan.** What v0.7 closed
+  and what comes next
+- **[NEXT_STEPS.md](NEXT_STEPS.md)** / **[NEXT_STEPS_V2.md](NEXT_STEPS_V2.md)** -
+  What the experiments demanded of the design, and the v0.6 plan; both
+  superseded, both kept as the record
 - **[ISSUES_RATCHET.md](ISSUES_RATCHET.md)** - The v0 code review: 21 findings, each
   reproduced by execution, all closed
 - **[EXPERIMENT_LEETCODE.md](EXPERIMENT_LEETCODE.md)** - LeetCode ceiling experiment:
@@ -134,14 +140,35 @@ costs about the same, but is verifiable, durable, and outlives the implementatio
 
 The ratchet was the part worth shipping first, and it does not depend on any other
 part of Flux ([ISSUES.md](ISSUES.md) item D). [ratchet/](ratchet/) is a
-zero-dependency TypeScript CLI at v0.4 with 47 tests, validated in four real repos
+zero-dependency TypeScript CLI at v0.7 with 153 tests, validated in four real repos
 ([EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)) and hardened by a code review
 that reproduced 21 defects by execution ([ISSUES_RATCHET.md](ISSUES_RATCHET.md)).
 
-It now runs under itself. [`.ratchet/`](.ratchet) configures five subjects over
-this repository — checks of the checker — each validated against `4abc1d5`, the
-last v0 commit, where the corresponding bug actually lived. Replayed across its own
-history:
+**A heuristic is prose.** The v0.7 change: a subject is five lines in a closed
+vocabulary, not forty lines of hand-written plumbing — because that plumbing is
+where the field experiments found every check bug, and because the person who
+knows the domain is not always the person who writes Node.
+
+```
+heuristic basic-edge
+  run      node tools/simulate.js --hands 200000
+  seed     20260906
+  measure  edge  the number after "house edge:"
+  rule     edge is between -0.03 and 0.015
+  because  the published basic-strategy table puts this near -0.005
+```
+
+**And it enforces itself.** `ratchet guard` is one command with one exit code —
+the rules file parses, the corpus is intact, every active row still holds, every
+subject has been proven able to fail. `ratchet hooks install` wires it into
+pre-commit; the same command belongs in CI. Nothing depends on anyone
+remembering to run a checker.
+
+It runs under itself in both forms. [`.ratchet/`](.ratchet) configures six
+scripted subjects over this repository — checks of the checker, each validated
+against `4abc1d5`, the last v0 commit, where the corresponding bug actually
+lived — plus one prose heuristic pinning its own test suite. Replayed across its
+own history:
 
 ```
 ✗ 4abc1d5  ratchet experiments                    0 pass, 5 fail

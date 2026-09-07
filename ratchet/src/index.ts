@@ -13,11 +13,31 @@ import { fsck, formatFsck } from "./fsck";
 import { listRows, formatList, showRow, formatRow } from "./inspect";
 import { appendJournal } from "./journal";
 import { recordVisual, diffImageFiles, describeDiff, ratchetHome, type VisualInput } from "./visual-cli";
+import { guard, formatGuard } from "./guard";
+import { fmt, formatFmt, listHeuristics, formatHeuristicList, heuristicLog, formatHeuristicLog } from "./heuristics-cmd";
+import { installHook, uninstallHook, hookStatus } from "./hooks";
+import { adopt, formatAdopt } from "./adopt";
+import { renderComment } from "./pr-comment";
+import { yieldReport, formatYield } from "./yield";
+import { loadSubjects } from "./paths";
+import { loadHeuristics } from "./heuristic-config";
+import { validatedSubjects } from "./validate";
+import { ruleHash } from "./rule";
+import { toSubject } from "./heuristic-config";
+import { RULES_TEMPLATE, CONFIG_TEMPLATE, INIT_MESSAGE } from "./templates";
 
 function usage(): string {
   return `ratchet — regression memory for AI-assisted development
 
-  ratchet init                     create .ratchet/ with a config template
+  ratchet init                     create .ratchet/ with a config and rules template
+  ratchet guard [--strict] [--quiet]   the one command a build runs: parse, integrity,
+                                   rows, validation. Exits nonzero on any failure.
+  ratchet hooks install|uninstall|status [--pre-push]
+  ratchet heuristics [show <name>] [log <name>]   the prose subjects and their history
+  ratchet fmt [--check]            snap heuristics.rules to the canonical vocabulary
+  ratchet adopt <subject> --good <ref> [--bad ref] [--every N] [--dry-run]
+  ratchet yield                    which heuristics still produce evidence
+  ratchet pr-comment               the caught/new split as markdown, for CI
   ratchet capture <file...>        add counterexamples (fast-check capture JSON, junit.xml, or .tap)
                                    [--reopen] put retired rows back when they recur
   ratchet verify [--row id] [--subject name] [--quiet] [--jobs N]
@@ -56,8 +76,17 @@ function requireRoot(): string {
   return root;
 }
 
+/**
+ * The one resolver. Every command asks this; nothing reads `--home` itself.
+ *
+ * An empty `RATCHET_HOME` counts as unset, not as "the home is the empty
+ * path". `export RATCHET_HOME=` is how a shell unsets a variable sloppily,
+ * and `??` honored it — every command then failed with
+ * "no .ratchet/config.json found in " and a blank where the path should be.
+ */
 function homeDir(cwd: string): string {
-  return process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
+  const fromEnv = process.env.RATCHET_HOME;
+  return fromEnv !== undefined && fromEnv !== "" ? fromEnv : path.join(cwd, ".ratchet");
 }
 
 interface Args {
@@ -77,7 +106,7 @@ const VALUE_FLAGS = new Set([
   "--good", "--bad", "--setup", "--text", "--status", "--jobs",
   "--every", "--known-bad", "--known-good", "--input", "--confirm",
   "--route", "--file", "--viewport", "--tolerance", "--max-percent",
-  "--wait-ms", "--out",
+  "--wait-ms", "--out", "--command", "--stale-after", "--title",
 ]);
 
 function parseArgs(args: string[]): Args {
@@ -128,15 +157,8 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       fs.mkdirSync(dir, { recursive: true });
-      const config = {
-        subjects: {
-          example: {
-            check: "node check.js example",
-            captureProperty: "example property",
-          },
-        },
-      };
-      fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config, null, 2) + "\n", "utf8");
+      fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(CONFIG_TEMPLATE, null, 2) + "\n", "utf8");
+      fs.writeFileSync(path.join(dir, "heuristics.rules"), RULES_TEMPLATE, "utf8");
       fs.writeFileSync(path.join(dir, "corpus.jsonl"), "", "utf8");
       fs.writeFileSync(path.join(dir, "journal.jsonl"), "", "utf8");
       // Union-merge keeps two branches' appends from conflicting on the last
@@ -149,7 +171,158 @@ async function main(): Promise<void> {
         "visual/*-actual.png\nvisual/*-diff.png\n",
         "utf8"
       );
-      console.log("created .ratchet/ — configure subjects in .ratchet/config.json");
+      console.log(INIT_MESSAGE);
+      break;
+    }
+
+    case "guard": {
+      const cwd = requireRoot();
+      const jobs = flags.get("--jobs");
+      const stale = flags.get("--stale-after");
+      const result = await guard(cwd, {
+        ratchetHome: homeDir(cwd),
+        strict: bools.has("--strict"),
+        concurrency: jobs ? Math.max(1, parseInt(jobs, 10) || defaultConcurrency()) : undefined,
+        staleAfterDays: stale ? parseInt(stale, 10) : undefined,
+      });
+      if (json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (bools.has("--quiet")) {
+        // Quiet is for hooks: silence on success, the failures on failure.
+        if (!result.ok) console.log(formatGuard(result));
+      } else {
+        console.log(formatGuard(result));
+      }
+      process.exit(result.ok ? 0 : 1);
+      break;
+    }
+
+    case "hooks": {
+      const cwd = requireRoot();
+      const which = bools.has("--pre-push") ? "pre-push" : "pre-commit";
+      const sub = positionals[0] ?? "status";
+      if (sub === "install") {
+        const r = installHook(cwd, { hook: which, command: flags.get("--command") });
+        emit(json, r, `${r.detail}\n${r.path}`);
+        if (r.action === "refused") process.exit(1);
+      } else if (sub === "uninstall") {
+        const r = uninstallHook(cwd, which);
+        emit(json, r, r.detail);
+      } else if (sub === "status") {
+        const r = hookStatus(cwd, which);
+        emit(
+          json,
+          r,
+          r.installed
+            ? `${which}: the ratchet gate is installed (${r.path})`
+            : `${which}: not installed — \`ratchet hooks install\` wires \`ratchet guard\` into it`
+        );
+      } else {
+        console.error("usage: ratchet hooks <install|uninstall|status> [--pre-push] [--command \"...\"]");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "fmt": {
+      const cwd = requireRoot();
+      const check = bools.has("--check");
+      const result = fmt(homeDir(cwd), { write: !check });
+      emit(json, result, formatFmt(result, !check));
+      // --check is the CI form: exit nonzero when the committed file is not
+      // the canonical one, so a review always reads the checked clauses.
+      if (check && result.changed) process.exit(1);
+      break;
+    }
+
+    case "heuristics": {
+      const cwd = requireRoot();
+      const dir = homeDir(cwd);
+      const sub = positionals[0];
+
+      if (sub === "log") {
+        const name = positionals[1];
+        if (!name) {
+          console.error("usage: ratchet heuristics log <name>");
+          process.exit(1);
+        }
+        const loaded = loadHeuristics(dir);
+        const current = loaded.heuristics.find((h) => h.name === name);
+        const entries = heuristicLog(cwd, dir, name);
+        emit(
+          json,
+          entries,
+          formatHeuristicLog(name, entries, current, current ? ruleHash(name, toSubject(current), cwd) : undefined)
+        );
+        break;
+      }
+
+      const items = listHeuristics(cwd, dir);
+      if (sub === "show") {
+        const name = positionals[1];
+        const one = items.find((h) => h.name === name);
+        if (!one) {
+          console.error(
+            `no heuristic named "${name}"` +
+              (items.length ? ` — this repository declares: ${items.map((h) => h.name).join(", ")}` : "")
+          );
+          process.exit(1);
+        }
+        emit(json, one, formatHeuristicList([one!], loadHeuristics(dir).file));
+        break;
+      }
+      emit(json, items, formatHeuristicList(items, loadHeuristics(dir).file));
+      break;
+    }
+
+    case "yield": {
+      const cwd = requireRoot();
+      const dir = homeDir(cwd);
+      const config = loadSubjects(dir);
+      const stale = flags.get("--stale-after");
+      const r = yieldReport(dir, config, validatedSubjects(cwd, dir, config), {
+        staleAfterDays: stale ? parseInt(stale, 10) : undefined,
+        fromRules: config.fromRules,
+      });
+      emit(json, r, formatYield(r));
+      break;
+    }
+
+    case "adopt": {
+      const cwd = requireRoot();
+      const subject = positionals[0];
+      const good = flags.get("--good");
+      if (!subject || !good) {
+        console.error('usage: ratchet adopt <subject> --good <ref> [--bad ref] [--every N] [--setup "npm ci"] [--dry-run]');
+        process.exit(1);
+      }
+      const every = flags.get("--every");
+      const result = await adopt(cwd, subject, {
+        good: good!,
+        bad: flags.get("--bad"),
+        setup: flags.get("--setup"),
+        ratchetHome: homeDir(cwd),
+        actor: flags.get("--actor") ?? "human",
+        every: every ? Math.max(1, parseInt(every, 10)) : undefined,
+        dryRun: bools.has("--dry-run"),
+      });
+      emit(json, result, formatAdopt(result));
+      // Nothing captured is not an error — it is a finding about the heuristic.
+      break;
+    }
+
+    case "pr-comment": {
+      const cwd = requireRoot();
+      const dir = homeDir(cwd);
+      const results = await verify(cwd, { ratchetHome: dir, quiet: true });
+      const config = loadSubjects(dir);
+      const markdown = renderComment({
+        results,
+        report: reportData(cwd),
+        yields: yieldReport(dir, config, validatedSubjects(cwd, dir, config), { fromRules: config.fromRules }),
+        title: flags.get("--title"),
+      });
+      console.log(markdown);
       break;
     }
 
@@ -166,6 +339,7 @@ async function main(): Promise<void> {
           reopen: bools.has("--reopen"),
           actor: flags.get("--actor") ?? "human",
           confirmations: flags.has("--confirm") ? parseInt(flags.get("--confirm")!, 10) : undefined,
+          allowUnvalidated: bools.has("--allow-unvalidated"),
         }
       );
       const unhandled = rep.recurred.filter((r) => !r.reopened).length;
@@ -175,6 +349,18 @@ async function main(): Promise<void> {
         for (const id of rep.added) console.log(`+ ${id}`);
         for (const s of rep.skipped) console.log(`skip: ${s}`);
         for (const s of rep.flaky) console.log(`flaky: ${s}`);
+        for (const s of new Set(rep.unvalidated)) {
+          console.log(
+            `not captured: "${s}" has never been proven to fail on a known bug, so a row from it would be a` +
+              ` green light over nothing.
+` +
+              `    prove it:  ratchet validate ${s} --known-bad <sha> --known-good HEAD
+` +
+              `    or adopt it against your own history:  ratchet adopt ${s} --good <old-ref>
+` +
+              `    first use of a brand-new subject:  re-run with --allow-unvalidated (journaled)`
+          );
+        }
         for (const s of rep.unconfigured) {
           console.log(`not captured: "${s}" has no subject in .ratchet/config.json — add one, then capture again`);
         }
@@ -191,12 +377,15 @@ async function main(): Promise<void> {
           `\n${rep.added.length} added, ${rep.skipped.length} skipped` +
             (rep.flaky.length ? `, ${rep.flaky.length} flaky` : "") +
             (rep.recurred.length ? `, ${rep.recurred.length} recurred` : "") +
+            (rep.unvalidated.length ? `, ${rep.unvalidated.length} refused (unvalidated subject)` : "") +
             (rep.unconfigured.length ? `, ${rep.unconfigured.length} unconfigured` : "")
         );
       }
       // A recurrence is a live regression against a decision someone already
       // made. It must not exit green.
-      if (unhandled > 0 || rep.unconfigured.length > 0) process.exit(1);
+      // A refused capture is a red build on purpose: the counterexample was
+      // real and nothing recorded it, which is worse than a failing check.
+      if (unhandled > 0 || rep.unconfigured.length > 0 || rep.unvalidated.length > 0) process.exit(1);
       break;
     }
 
@@ -208,7 +397,11 @@ async function main(): Promise<void> {
         subject: flags.get("--subject"),
         quiet: bools.has("--quiet"),
         json,
-        ratchetHome: flags.get("--home"),
+        // The one resolver, like every other command. Reading the raw flag
+        // here was a second route to the same answer — the two agreed, but
+        // nothing made them, and "a mechanism wired into some of its call
+        // sites" is this codebase's most reliable defect.
+        ratchetHome: homeDir(cwd),
         concurrency: jobs ? Math.max(1, parseInt(jobs, 10) || defaultConcurrency()) : undefined,
       });
       break;

@@ -7,6 +7,7 @@ import { appendEvent, readCorpus, readEvents, foldRows, rowId, stableStringify }
 import { readJournal } from "../src/journal";
 import { pool } from "../src/runner";
 import { capture } from "../src/capture";
+import { proveSubjects } from "./proof";
 import { verify, countOutcomes } from "../src/verify";
 import { accept, reopen } from "../src/accept";
 import { fsck } from "../src/fsck";
@@ -40,6 +41,7 @@ function project(subjects: Record<string, unknown>, checkBody: string): { home: 
     ].join("\n"),
     "utf8"
   );
+  proveSubjects(home, root);
   return { home, root };
 }
 
@@ -203,7 +205,7 @@ test("R18: reopen on an active row is refused, like accept on an archived one", 
     accept(root, id, "fine", "alice");
     assert.throws(() => accept(root, id, "again", "alice"), /already archived/);
     assert.equal(
-      readJournal(path.join(home, "journal.jsonl")).length,
+      readJournal(path.join(home, "journal.jsonl")).filter((e) => e.kind !== "validation").length,
       1,
       "no-ops must not pollute the decision log"
     );

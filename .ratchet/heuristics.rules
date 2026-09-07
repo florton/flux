@@ -1,0 +1,82 @@
+# The ratchet's own prose heuristics.
+#
+# The six subjects in config.json are checks of the checker: each reproduces a
+# defect this repository actually shipped, and each needs arbitrary computation
+# (scratch corpora, merge simulation, PNG round-trips), so they stay scripts.
+#
+# This one is the other half of the argument -- a standing invariant that needs
+# no plumbing at all, and so is written as data instead of as code. If the prose
+# form cannot express the invariants of the tool that ships it, it cannot be
+# claimed to express anyone else's.
+
+heuristic test-suite
+  run      node --test ratchet/dist/test/
+  timeout  600000
+  applies  when ratchet/dist/test exists
+  measure  failing  number after "# fail"
+  measure  passing  number after "# pass"
+  rule     failing is 0
+  rule     passing is at least 159
+  because  a suite that shrinks silently is how a ratchet stops ratcheting: the
+  because  count is a floor, raised deliberately, never lowered by accident
+
+# The three below cover the class of defect the corpus was missing.
+#
+# Classifying the twenty-one v0 review defects against the six scripted
+# subjects showed every one of those subjects was a check of a data structure:
+# five of twenty-one defects, all in one row of the table. The other sixteen
+# sat at the process boundary, on the CLI surface, in the capture-path routing
+# or in packaging, and none of them had a subject -- because a scratch corpus
+# and a deepStrictEqual cannot reach them. The corpus was built where it was
+# easy rather than where the bugs live.
+#
+# Each of these runs a frozen instrument out of {home}, so `replay` and
+# `adopt` measure every commit with today's driver instead of whatever that
+# commit happened to contain.
+
+heuristic cli-end-to-end
+  run      node {home}/tools/e2e.js
+  timeout  900000
+  owns     .ratchet/tools/e2e.js
+  applies  when ratchet/dist/src/index.js exists
+  measure  failures  count of lines matching "FAIL "
+  measure  declared  number after "scenarios declared:"
+  measure  ran  number after "scenarios run:"
+  rule     failures is 0
+  rule     declared is at least 13
+  rule     ran is at least 1
+  note     each scenario names the guarantee it drives, so a red line is a
+  note     sentence about the tool rather than a line number in the driver
+  because  the loop in the README -- init, fmt, adopt, verify, break it,
+  because  quarantine, reaffirm -- is the product, and running it by hand once
+  because  per release is a ritual, not a mechanism
+
+heuristic cli-errors-are-messages
+  run      node {home}/tools/error-paths.js
+  timeout  600000
+  owns     .ratchet/tools/error-paths.js
+  applies  when ratchet/dist/src/index.js exists
+  measure  traces  count of lines matching "STACK "
+  measure  silent  count of lines matching "SILENT "
+  measure  homes  number after "broken homes:"
+  measure  probed  number after "commands probed:"
+  rule     traces is 0
+  rule     silent is 0
+  rule     homes is 3
+  rule     probed is at least 8
+  because  a stack trace means the failure reached the top of the program
+  because  unhandled, so nothing decided what it meant, and the reader learns
+  because  the line number of a JSON.parse instead of which file to fix
+
+heuristic source-uniformity
+  run      node {home}/tools/uniformity.js
+  owns     .ratchet/tools/uniformity.js
+  applies  when ratchet/src exists
+  measure  violations  count of lines matching "VIOLATION "
+  measure  declared  number after "invariants declared:"
+  rule     violations is 0
+  rule     declared is at least 5
+  because  partial application of a mechanism -- defined once, wired into some
+  because  of its call sites -- has shipped four times in three versions, and a
+  because  corpus row cannot catch it: a row is one counterexample and this is
+  because  a completeness property over a set of call sites

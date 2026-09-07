@@ -2,6 +2,7 @@ import { spawn, spawnSync, SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { NA_EXIT_CODE, type CheckOutcome } from "./types";
+import { substituteArgv, substituteShell } from "./substitution";
 
 export interface RunOptions {
   cwd: string;
@@ -20,6 +21,20 @@ export interface RunOptions {
    * readings across history comparable by construction rather than by hope.
    */
   homeDir?: string;
+  /**
+   * The ratchet's own install directory, for `{ratchet}` substitution and the
+   * RATCHET_BIN env var. This is how a prose heuristic reaches the bundled
+   * probe: the probe is the ratchet's binary, not the project's, so it is
+   * outside the measured tree by construction and replay carries it across
+   * history for free. Defaults to the running build.
+   */
+  ratchetBin?: string;
+  /**
+   * The repository root, exported as RATCHET_PROJECT_ROOT. A check spawned in
+   * a worktree needs to know which tree it is measuring; `cwd` already says
+   * so, but the bundled probe re-spawns and must not lose it.
+   */
+  projectRoot?: string;
 }
 
 export interface RunResult {
@@ -109,6 +124,9 @@ function invocation(command: string, input: unknown, opts: RunOptions): Invocati
   const env = { ...process.env };
   if (opts.testName !== undefined) env.RATCHET_TEST = opts.testName;
   if (opts.homeDir !== undefined) env.RATCHET_HOME = opts.homeDir;
+  const ratchetBin = opts.ratchetBin ?? __dirname;
+  env.RATCHET_BIN = ratchetBin;
+  env.RATCHET_PROJECT_ROOT = opts.projectRoot ?? opts.cwd;
 
   const options = {
     cwd: opts.cwd,
@@ -120,11 +138,19 @@ function invocation(command: string, input: unknown, opts: RunOptions): Invocati
   if (opts.shell) {
     // The command string is the project's own committed config, at the same
     // trust level as a Makefile target. The test name is NOT interpolated
-    // into it — it reaches the check through RATCHET_TEST only.
+    // into it — it reaches the check through RATCHET_TEST only, because a
+    // test name comes from a test file and can contain anything.
     if (command.includes("{test}")) {
       return fail('{test} substitution is not available with "shell": true — read RATCHET_TEST instead');
     }
-    return { exe: command, args: [], options: { ...options, shell: true } };
+    // {home} and {ratchet} are different: they are paths the ratchet computes
+    // itself, and substituting them is the whole frozen-instrument mechanism.
+    // Without this, a `--setup` script written as `node {home}/tools/build.js`
+    // is looked for inside the worktree, where a script added last month does
+    // not exist at a commit from last year.
+    const substituted = substituteShell(command, { home: opts.homeDir, ratchet: ratchetBin });
+    if ("error" in substituted) return fail(substituted.error);
+    return { exe: substituted.command, args: [], options: { ...options, shell: true } };
   }
 
   let argv: string[];
@@ -140,9 +166,7 @@ function invocation(command: string, input: unknown, opts: RunOptions): Invocati
   if (opts.testName !== undefined) {
     argv = argv.map((t) => (t.includes("{test}") ? t.split("{test}").join(opts.testName!) : t));
   }
-  if (opts.homeDir !== undefined) {
-    argv = argv.map((t) => (t.includes("{home}") ? t.split("{home}").join(opts.homeDir!) : t));
-  }
+  argv = substituteArgv(argv, { home: opts.homeDir, ratchet: ratchetBin });
   const exe = resolveExecutable(argv[0], opts.cwd);
   if (/\.(cmd|bat)$/i.test(exe)) {
     return fail(

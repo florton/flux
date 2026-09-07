@@ -1,34 +1,200 @@
-# Ratchet — v0.6 prototype
+# Ratchet — v0.8 prototype
 
 Regression memory for AI-assisted development. The design sketch is
-[../RATCHET.md](../RATCHET.md); this folder is the first working slice.
+[../RATCHET.md](../RATCHET.md); this folder is the working implementation.
 
 > **Status.** All 21 issues from the v0 review
-> ([../ISSUES_RATCHET.md](../ISSUES_RATCHET.md)) are closed, and v0.4 closes
+> ([../ISSUES_RATCHET.md](../ISSUES_RATCHET.md)) are closed, and v0.4 closed
 > the design gaps that remained after them: owning-rule hashes and quarantine,
 > the second confirmation run, `ratchet replay` with sampling and halving,
-> `ratchet validate`, and self-hosting. The ratchet now runs under itself —
-> its own invariants are validated against the commits where its own bugs
-> lived. v0.5 added the first *behavior snapshot*: visual pins — screenshots
-> become corpus rows, with a zero-dependency PNG diff as the check's witness.
-> v0.6 works the adoption gaps: the ratchet's **own corpus is populated** (the
-> five v0 defects captured at the commit where they lived and re-pinned to
-> today's instrument), capture gains a **TAP source** and a hardier JUnit
-> parser, `replay` probes history on **parallel worktrees** (`--jobs`), and
-> `report` rates failure signals as **caught-by-corpus vs. novel**. 70 tests.
+> `ratchet validate`, and self-hosting. v0.5 added the first *behavior
+> snapshot*: visual pins — screenshots become corpus rows, with a
+> zero-dependency PNG diff as the check's witness. v0.6 worked the adoption
+> gaps: the ratchet's own corpus is populated, capture gained a TAP source and
+> a hardier JUnit parser, `replay` probes history on parallel worktrees, and
+> `report` rates failure signals as caught-by-corpus vs. novel.
+>
+> **v0.7 makes the heuristic the cheap unit of work.** A heuristic is now
+> *data* — prose in a closed vocabulary, in `.ratchet/heuristics.rules`, run by
+> a bundled probe with a bundled seeded-RNG preload. Validation became a
+> **capture gate** rather than a convention. `ratchet guard` and
+> `ratchet hooks install` make the whole thing **self-enforcing**, the way a
+> TypeScript build is. `ratchet adopt` arms a new heuristic against the history
+> it was written for in one command. `ratchet heuristics log` reads a
+> heuristic's change history out of git, and a quarantine now shows **which
+> clause moved**. 153 tests.
+>
+> **v0.8 puts the corpus where the bugs are.** Measuring why the tool's own
+> gate stayed green through ten of its own defects showed that all six
+> self-hosted subjects checked a *data structure*, while sixteen of the
+> twenty-one v0 defects sat at the process boundary, on the CLI surface or in
+> an error path. Three new subjects cover those classes: an end-to-end CLI
+> driver, an error-path prober over every command the binary lists, and static
+> uniformity invariants over the source — the only mechanism that catches a
+> mechanism wired into some of its call sites and not others. Writing them
+> found four more defects, including one in `adopt` that made every buildable
+> subject look flaky. 159 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
-journal is plain JSONL; everything is a file git already knows how to commit.
+journal is plain JSONL; the heuristics are plain text; everything is a file git
+already knows how to commit, diff and merge.
+
+## A heuristic, in full
+
+```
+heuristic basic-edge
+  run      node tools/simulate.js --hands 200000
+  seed     20260906
+  measure  edge  the number after "house edge:"
+  rule     edge is between -0.03 and 0.015
+  because  the published basic-strategy table puts this near -0.005
+```
+
+That is a complete, enforcing subject. There is no glue file, no script, no
+reporter to wire up. When it fails, it says what it measured:
+
+```
+✗ c74c11d9f4cf1 basic-edge — edge measured -0.0564, rule says "edge is between -0.03 and 0.015"
+    because: the published basic-strategy table puts this near -0.005
+```
+
+**Why prose is the default form.** Every subject through v0.6 was a
+host-language script, and the field experiments
+([../EXPERIMENTS_RATCHET.md](../EXPERIMENTS_RATCHET.md)) found the check bugs
+living in exactly that hand-written plumbing: a `matchAll` off-by-one, a
+character class that matched the "e" in "percent", a null stdout crash, a
+`yarn` vs `yarn.cmd` spawn failure. None of those bugs were in the *heuristic*.
+They were in the instrument built to express it. A band written as a sentence
+has nowhere to put a bug of that class.
+
+The second reason matters more: the person who knows that the house edge should
+be near −0.005 is not always the person who writes Node. A specification only a
+programmer can touch decays into a second copy of the code.
+
+**Scripts remain the base case.** `.ratchet/config.json` still takes a check
+command, exactly as before, and that is the right home for anything needing
+arbitrary computation — the ratchet's own six self-hosted subjects are scripts,
+because simulating a branch merge is not a sentence. Both forms produce
+subjects that are indistinguishable to everything downstream.
+
+### Writing one: authoring is loose, storage is canonical
+
+You do not have to remember that the vocabulary says `is above` and not
+`is greater than`. Write it however it comes out and run `ratchet fmt`:
+
+```
+$ ratchet fmt
+2 clause(s) snapped to the vocabulary:
+     5 | the edge should be greater than -0.03
+       | edge is above -0.03
+     6 | edge must be less than 0.015
+       | edge is below 0.015
+
+wrote heuristics.rules — commit it, so the clauses that are checked are the clauses that are reviewed
+```
+
+Every rewrite is a deterministic table lookup — synonyms, operator spellings,
+modal verbs, articles. **Nothing is guessed and no model is consulted**, so
+`fmt` runs unattended in a build (`ratchet fmt --check` exits nonzero when the
+committed file is not canonical). What the table cannot resolve is a compiler-
+style error, never a silent reinterpretation:
+
+```
+heuristics.rules:6:12: "is abov" is not a comparison
+   6 |   rule     edge is abov -0.03
+     |            ^
+     did you mean `is above`?
+```
+
+A tool that quietly decides you meant `is above 5000` and guesses wrong is the
+same failure as a model in the oracle: it changes what the spec says without
+anyone reading a diff.
+
+### The vocabulary
+
+Fixed by the tool, not per project.
+
+| Clause | Means |
+|---|---|
+| `run <command>` | the instrument: what produces the observation |
+| `measure <name> <how>` | bind a name to a value read out of the output |
+| `rule <name> <predicate>` | **checked**: what must be true of that value |
+| `note <text>` | prose only, never checked, never counted as a rule |
+| `because <text>` | why this matters — quoted back on every failure |
+| `seed <n>` | seed `Math.random` in the instrument and anything it spawns |
+| `timeout <ms>` | per-heuristic timeout. Default 30000 |
+| `owns <path>` | a file whose contents are part of this rule's identity |
+| `applies when <path> exists` | report n/a where that path is absent |
+
+Ways to read a value:
+
+| Extractor | Reads |
+|---|---|
+| `the number after "LABEL"` | the first number following that text in stdout |
+| `the json field a.b.c` | parse stdout as JSON, follow a dotted path |
+| `the count of lines matching "TEXT"` | how many output lines contain it |
+| `the exit code` | the instrument's own status |
+| `the output` | all of stdout, trimmed |
+
+Ways to check one: `is` · `is not` · `is one of A, B, C` · `is above N` ·
+`is below N` · `is at least N` · `is at most N` · `is between N and M` ·
+`is within P percent of N` · `contains "S"` · `does not contain "S"` ·
+`starts with "S"` · `ends with "S"` · `is empty` · `is not empty` ·
+`is a number` · `is the same as <other measure>`.
+
+**A `note` is not a rule.** It is prose the vocabulary cannot express, it is
+never checked, and it is excluded from every rule count — listed as
+`(prose only, never checked)` so it is never mistaken for a guarantee. A
+heuristic with *no* rule is a parse error: a check that cannot fail is a green
+light over nothing.
+
+### What the tool refuses to let you get wrong
+
+These are errors, not warnings, because each one is a heuristic that looks like
+it is working and is not:
+
+- **A clause that does not parse.** Every command refuses to run, naming the
+  line and column. Carrying on with the heuristics that happened to parse would
+  mean a mistyped clause silently stops enforcing while the build stays green.
+- **A heuristic with no `rule`.** It can never fail.
+- **A rule over a measure that does not exist**, or `is the same as` naming a
+  measure the heuristic does not take.
+- **An empty band** (`is between 5 and 1`).
+- **A measure the instrument stopped producing.** The rule fails — loudly, once
+  per broken instrument rather than once per rule — with what the command
+  actually printed:
+  `edge could not be measured: no "house edge:" in the output — the command printed: "all good"`.
+- **A nonzero exit from the instrument**, unless the heuristic explicitly
+  measures `the exit code`. Reading numbers out of a crashed command is reading
+  noise.
+
+### Determinism: `seed`
+
+A band over an unseeded simulation is measuring noise. `seed 20260906` sets
+`RATCHET_SEED` and injects a seeded `Math.random` into the instrument and
+everything it spawns. Two honest limits, both worth knowing before trusting a
+band: it seeds `Math.random` only (not `crypto`, not the clock, not a library's
+own generator), and it reaches Node processes only — anything else gets
+`RATCHET_SEED` in its environment and nothing more.
 
 ## Running against a local repo
 
 1. Build once: `cd ratchet && npm install && npm run build`
 2. `alias ratchet="node /path/to/ratchet/dist/src/index.js"`
-3. In the target repo: `ratchet init`, then edit `.ratchet/config.json` — for
-   each subject, a `check` command that reads one input as JSON on stdin and
-   exits 0 (pass) or nonzero (fail).
-4. Wire a fast-check reporter into your property tests (`demo/setup.js`
-   generates a working one), or point `ratchet capture` at CI's JUnit XML.
+3. In the target repo: `ratchet init`
+4. Write a heuristic in `.ratchet/heuristics.rules` — a `run` command, a
+   `measure`, and a `rule`. `ratchet fmt` snaps loose wording to the
+   vocabulary. For anything needing arbitrary computation, add a scripted
+   subject to `.ratchet/config.json` instead: a `check` command that reads one
+   input as JSON on stdin and exits 0 (pass) or nonzero (fail).
+5. `ratchet adopt <name> --good <an-old-ref>` — prove it against your own
+   history and arm it in one step.
+6. `ratchet hooks install` — make it enforce on every commit.
+7. Optionally wire capture to your test runner: a fast-check reporter
+   (`demo/setup.js` generates a working one), CI's JUnit XML, or a TAP stream.
+
+Steps 4-6 are the loop. Everything else in this README is detail on one of
+them.
 
 The CLI finds `.ratchet/` by walking up from the working directory, so run it
 from anywhere inside the repo. `--home <dir>` overrides that for every
@@ -45,32 +211,238 @@ $ ratchet verify --home "$MEM/.ratchet"   # today's corpus, old code
 
 `ratchet bisect` does the carrying for you.
 
+## Self-enforcement: `ratchet guard`
+
+Every guarantee up to v0.6 needed a human to remember a different command:
+`verify` for rows, `fsck` for integrity, `fmt` for the rules file, `validate`
+before trusting a subject. A guarantee that needs remembering is a guarantee
+that lapses on the first busy afternoon. `tsc` does not ask you to remember to
+typecheck.
+
+So: one gate, one exit code, four questions.
+
+```
+$ ratchet guard
+✓ heuristics canonical 3 heuristic(s), canonical
+✓ integrity            corpus and journal readable, ids match their content
+✗ rows                 0/1 rows pass, 1 failing
+  ✗ c74c11d9f basic-edge — edge measured -0.0564, rule says "edge is between -0.03 and 0.015"
+  run `ratchet verify` for the full witness, or `ratchet show <id>` for one row's history
+✓ validation           all 3 subject(s) proven against a known bug
+
+guard failed: rows
+```
+
+| Step | Fails the build | Because |
+|---|---|---|
+| rules file parses | **yes** | a clause that stopped parsing is a check that stopped running |
+| rules file is canonical | warning | formatting is not a regression |
+| corpus integrity | **yes** | a row hidden behind a parse error is a false pass |
+| active rows hold | **yes** | this is the regression gate |
+| gate is mostly `na` | warning | green while checking almost nothing |
+| every subject validated | warning (`--strict`: yes) | caught harder at `capture`, below |
+
+### Wire it into git
+
+```
+$ ratchet hooks install
+pre-commit runs: ratchet guard --quiet
+```
+
+The installer never overwrites a hook it did not write — an existing
+`pre-commit` is a colleague's work, and clobbering it to install a quality gate
+would be its own small regression. It appends inside markers, and
+`ratchet hooks uninstall` removes exactly that block. When `ratchet` is not on
+PATH it pins the interpreter and entry point that are running, and says so, so
+the hook does not die with "command not found" for reasons that have nothing to
+do with your code.
+
+A hook is advisory — `--no-verify` exists, and a fresh clone has no hooks — so
+CI runs the same command. A committed workflow is in
+[ci/github-actions.yml](ci/github-actions.yml).
+
+## Validation is a gate, not a ritual
+
+> Every subject must be proven to fail on at least one known past bug before it
+> can be captured from. A subject that passes through history's known bugs is
+> too weak.
+
+`ratchet validate` has existed since v0.4, and nothing made anyone run it. Now
+`capture` refuses:
+
+```
+$ ratchet capture junit.xml
+not captured: "basic-edge" has never been proven to fail on a known bug, so a row
+from it would be a green light over nothing.
+    prove it:  ratchet validate basic-edge --known-bad <sha> --known-good HEAD
+    or adopt it against your own history:  ratchet adopt basic-edge --good <old-ref>
+    first use of a brand-new subject:  re-run with --allow-unvalidated (journaled)
+```
+
+Capture is the cheapest place to catch a vacuous check: after that the corpus
+carries a permanent green light over nothing. It is also the load-bearing
+safety mechanism for *generated* coverage heuristics, which arrive in bulk and
+are exactly the kind that pass through every bug.
+
+The proof is recorded against the rule hash it was proven under, so **editing a
+check invalidates its own validation**. "Validated once" never means "trusted
+forever".
+
+`--allow-unvalidated` is the escape hatch for a subject's very first use, and
+it is journaled once per subject — the exception goes on the record rather than
+into somebody's shell history.
+
+## `ratchet adopt` — arming a heuristic against the history it was written for
+
+A heuristic is born the moment somebody notices something worth watching, which
+is almost always *after* the bug it describes. Arming it used to mean a manual
+worktree dance: check out the bad commit, build it, capture against a carried
+home, come back, reaffirm. That was six commands, and it was the actual
+procedure used to populate this repository's own corpus.
+
+```
+$ ratchet adopt basic-edge --good v1.0
+subject: basic-edge  (rule a52368a31f69b838)
+  ✗ 9b719276  score pushes as losses (the bug)   edge measured -0.0564, rule says "edge is above -0.03"
+  ✗ 1ab36ae8  tidy                               edge measured -0.0564, rule says "edge is above -0.03"
+  ✓ e4a39171  fix push scoring
+  ✓ dcc825e5  adopt the basic-edge heuristic
+
+first failing probed commit: 9b719276 "score pushes as losses (the bug)"
+  witness: edge measured -0.0564, rule says "edge is above -0.03"
+captured c74c11d9f4cf1 pinned to the current rule — `ratchet verify` enforces it from now on
+validated: it fails where the bug lived and passes where it was fixed
+```
+
+One command, and the heuristic is born validated, immediately enforcing, with
+its fix history already drawn. Failing where the bug lived and passing where it
+was fixed *is* the validation protocol, observed rather than asserted, so the
+proof is written and the capture gate opens.
+
+It refuses to store a heuristic that fails once and passes on the confirmation
+run — a flaky row reddens every future build — and it tells you when a
+heuristic passes at every commit in the range, which means either the history
+never had the problem or the heuristic is too weak to see it.
+
+`--every N` samples, `--setup "npm ci"` prepares each worktree, `--dry-run`
+reports without writing.
+
+## Editing a heuristic
+
+An edit is an ordinary text edit: open the file, change the band, commit. The
+consequences are already handled by the quarantine rule — a row pinned to the
+old rule stops enforcing until someone decides. What v0.7 adds is the sentence:
+
+```
+$ ratchet verify
+? c74c11d9f4cf1 basic-edge — quarantined: edge measured -0.0564, rule says "edge is above -0.01"
+    the heuristic changed since this row was captured (dcc825e "adopt the basic-edge heuristic"):
+    - rule edge is above -0.03
+    + rule edge is above -0.01
+    review, then `ratchet reaffirm c74c11d9f4cf1 --reason "..."` (the expectation stands)
+    or `ratchet accept c74c11d9f4cf1 --reason "..."` (it does not)
+```
+
+"rule fd59… became a3b1…" tells a reviewer nothing. The clause that moved, and
+the commit that moved it, tells them everything.
+
+The history comes from git, not from a ledger the ratchet has to keep in sync:
+
+```
+$ ratchet heuristics log basic-edge
+29aa612  2026-09-06  Alice  widen the edge band: -0.03 was tighter than the table justifies
+  rule e9b80de087dd26e8
+  - rule edge is above -0.03
+  + rule edge is above -0.08
+
+dcc825e  2026-09-06  Alice  adopt the basic-edge heuristic
+  rule a52368a31f69b838
+  + heuristic basic-edge
+  + rule edge is above -0.03
+  ...
+```
+
+Commits that touched the file without changing *this* heuristic are collapsed
+away, so the list is the times it actually moved. It works retroactively on
+history recorded before the command existed, because the source is the
+repository.
+
+**A cosmetic edit is not a change of expectation.** The rule hash is taken over
+canonical *content*, not layout, so re-aligning the file or running `fmt`
+quarantines nothing. If it did, people would stop touching the file.
+
+## Which heuristics still earn their keep
+
+The caught/new split says what *did* fail. Nothing said which heuristic stopped
+producing evidence — and a heuristic guarding a stable invariant looks
+identical, from outside, to one that broke six months ago.
+
+```
+$ ratchet yield
+  basic-edge          3 rows (2 active)  last evidence 4d ago     [prose, validated]
+  galaxy-structure    1 row  (1 active)  last evidence 240d ago   [prose, validated]
+  deck-integrity      0 rows (0 active)  no evidence yet          [script, UNVALIDATED]
+
+1 subject(s) have never produced a counterexample: deck-integrity
+  That is fine for a standing invariant and a warning sign for a heuristic adopted to catch something specific.
+1 subject(s) quiet for over 90 days: galaxy-structure (240d)
+```
+
+`ratchet report` surfaces the same signals alongside the churn numbers, and
+`verify` says out loud when most of the gate reported `na` — a gate that is
+mostly not-applicable is green while checking nothing.
+
+## CI: the signal where merges are reviewed
+
+`--json` existed since v0.3 and nothing consumed it. `ratchet pr-comment`
+renders the gate as markdown on stdout:
+
+```
+$ ratchet pr-comment | gh pr comment --body-file -
+```
+
+Rendering and posting stay separate on purpose: a tool that posts needs a
+token, a host, an API version and a retry policy; a tool that prints markdown
+works on every forge and pipes into a file, a chat webhook, or a build summary.
+
+The comment states the verdict, the failing rows with their witnesses, the
+quarantined rows with the command that resolves each, and the caught/new split.
+[ci/github-actions.yml](ci/github-actions.yml) also runs the corpus across
+`base..merge` — both branches of a merge can be green while their union is not.
+
+
 ## The workflow — preventing regressions with the ratchet
 
 The ratchet is a loop, not a one-time setup. The order below is the order of
 leverage; each step names the section that details it.
 
-1. **Wire once, keep the instrument frozen.** `ratchet init`, then write
-   checks as `node {home}/tools/probe.js <subject>` — `{home}` resolves to
-   the ratchet home, which history commands carry out of the working tree,
-   so `replay` and `bisect` measure every commit with the same script (see
-   "The frozen instrument"). Declare `owns` for the measuring scripts; a
-   subject without `owns` cannot tell you when its instrument was edited
-   (see "The owning rule, and quarantine").
-2. **Validate before you trust.** `ratchet validate <subject> --known-bad
-   <sha> --known-good <sha>` — a subject that passes through a known bug is
-   too weak to watch anything, and the proof is journaled against the rule
-   hash it was proven under (see "Validating a subject").
+1. **Write the heuristic, not the instrument.** `ratchet init`, then a
+   `heuristic` block in `.ratchet/heuristics.rules` — a `run` command, a
+   `measure`, a `rule`. The bundled probe is the instrument, and it lives
+   outside the tree it measures, so `replay` and `bisect` measure every commit
+   with the same one. Reach for a scripted subject only when the check needs
+   arbitrary computation; write it as `node {home}/tools/probe.js <subject>`
+   and declare `owns` for the measuring scripts, or it cannot tell you when its
+   instrument was edited (see "The frozen instrument" and "The owning rule").
+2. **Prove it before you trust it.** `ratchet adopt <subject> --good <ref>`
+   runs it across your history, captures the oldest commit where it fails, and
+   records the proof — one command. `ratchet validate <subject> --known-bad
+   <sha> --known-good <sha>` is the same protocol when you already know the
+   commit. A subject that passes through a known bug is too weak to watch
+   anything, and **`capture` refuses to store rows from an unproven subject**
+   (see "Validation is a gate, not a ritual").
 3. **Capture rides the same PR as the fix.** Point a fast-check reporter,
    JUnit XML, or TAP at `ratchet capture` on red CI runs and commit the new
    rows alongside the fix. Discrimination, the confirmation runs, and
    cause-preserving minimization happen at capture — flakes never enter the
    corpus (see "Capture sources").
-4. **Gate every merge with `ratchet verify`.** Rows are checked in parallel
-   by default (`--jobs N` to tune). Rule unchanged and row fails → hard
-   block. Rule edited and row fails → quarantine → review, then `reaffirm`
-   (the expectation stands under the new instrument) or `accept` (it does
-   not).
+4. **Gate every commit and every merge with `ratchet guard`.**
+   `ratchet hooks install` wires it into pre-commit; the same command belongs
+   in CI, because a hook is advisory. Rows are checked in parallel by default
+   (`--jobs N` to tune). Rule unchanged and row fails → hard block. Rule edited
+   and row fails → quarantine → review, then `reaffirm` (the expectation stands
+   under the new instrument) or `accept` (it does not); the quarantine names
+   the clause that moved.
 5. **Never re-derive an expectation silently.** Intended behavior changes go
    through the ceremony: `accept <id> --reason "..."`, then re-`record` the
    visual baseline if there is one. The recurrence gate means a retired
@@ -104,9 +476,21 @@ verification, replay. The division is the product.
 ## Commands
 
 ```
-ratchet init                      create .ratchet/ with a config template
+ratchet init                      create .ratchet/ with a rules and config template
+ratchet guard [--strict] [--quiet] [--jobs N]
+                                  the one command a build runs: parse, integrity,
+                                  rows, validation. Nonzero on any failure.
+ratchet hooks install|uninstall|status [--pre-push] [--command "..."]
+ratchet heuristics                list the prose subjects, their rules and rows
+ratchet heuristics show <name>
+ratchet heuristics log <name>     every commit that changed this heuristic
+ratchet fmt [--check]             snap heuristics.rules to the canonical vocabulary
+ratchet adopt <subject> --good ref [--bad ref] [--every N] [--setup "..."] [--dry-run]
+ratchet yield [--stale-after N]   which heuristics still produce evidence
+ratchet pr-comment [--title "..."]  the gate as markdown, for CI
 ratchet capture <file...>         add counterexamples (fast-check capture JSON, junit.xml, or .tap)
                                   [--reopen] put retired rows back when they recur
+                                  [--allow-unvalidated] first use of a new subject
 ratchet verify [--row id] [--subject name] [--quiet] [--jobs N]
 ratchet list [--status active|archived] [--subject name]
 ratchet show <id>                 a row's input, witness, history and journal
@@ -180,7 +564,11 @@ in CI scripts and for reviewing that diff artifact everywhere.
 
 ## Config
 
-`.ratchet/config.json` maps subjects to check commands:
+Subjects come from two files, merged into one map. `.ratchet/heuristics.rules`
+holds the prose ones (above); `.ratchet/config.json` maps the scripted ones to
+check commands. A name declared in both is reported by `ratchet fsck` rather
+than silently resolved — config.json wins, so adding a rules file never changes
+an existing project's behavior underneath it.
 
 ```json
 {
@@ -431,10 +819,13 @@ still retires the row.
 
 ## Self-hosting
 
-The ratchet runs under itself. [`../.ratchet/`](../.ratchet) configures six
-subjects over this repository, each a check of the checker, each invoked
-through `{home}` so it is carried across history rather than read from the
-tree it measures:
+The ratchet runs under itself, in both forms.
+
+**Six scripted subjects**, each a check of the checker, each invoked through
+`{home}` so it is carried across history rather than read from the tree it
+measures. These stay scripts on purpose: simulating a branch merge or a PNG
+codec round-trip is not a sentence, and pretending otherwise would be the
+contortion the prose form exists to avoid.
 
 | subject | asserts | catches |
 |---|---|---|
@@ -477,6 +868,108 @@ they tested `minimize` and `foldRows` in isolation, while the defects lived in
 the *capture* path that calls them, so they passed straight through the bug.
 That is the protocol working as intended.
 
+**What those five rows did not cover.** All five are corpus and
+data-structure semantics — fold order, id collision, reduction slippage, dedup
+partitioning, stringify injectivity. They are the defects a scratch corpus and
+a `deepStrictEqual` can reach. Of the twenty-one defects in the v0 review,
+sixteen sat at the process boundary, on the CLI surface, or in the error
+paths, and none of those had a row: the corpus had been built where it was
+easy rather than where the bugs live. The measurement is in
+[NEXT_STEPS_V3.md](../NEXT_STEPS_V3.md#the-finding-that-should-shape-v08-the-corpus-is-in-the-wrong-place).
+v0.8 closes it with three more subjects, below.
+
+### Covering the classes the corpus was missing
+
+Three subjects, all prose, each running a *frozen instrument* out of `{home}`
+so `replay` and `adopt` measure every commit with today's driver rather than
+whatever that commit happened to contain.
+
+| Subject | What it drives | Adopted against |
+|---|---|---|
+| `cli-end-to-end` | 13 scenarios spawning the real binary in real scratch git repositories — `init`, `fmt`, `adopt`, `verify` red with the right witness, quarantine and its prose diff, `reaffirm`, the capture gate, `--home` from a nested directory, `seed`, `guard`, the hook installer | `7a5b36c` (v0.7) |
+| `cli-errors-are-messages` | every command in the binary's *own usage*, against a corpus that took a bad merge, an unparseable rules file, and a home that was never initialized | `76865c4` (v0) |
+| `source-uniformity` | five static invariants over `ratchet/src` — the only mechanism that catches partial application | `7a5b36c` (v0.7) |
+
+Each was adopted with `ratchet adopt`, so each is validated the same way the
+five scripted subjects are: observed failing where a defect actually lived and
+passing where it was fixed.
+
+```
+$ ratchet adopt cli-errors-are-messages --good 76865c4^ --bad 0d710eb --setup "node {home}/tools/build.js"
+  ✗ 76865c48  ratchet v0                              traces measured 12, rule says "traces is 0"
+  ✗ 4abc1d54  ratchet experiments                     traces measured 12, rule says "traces is 0"
+  ✓ 0d710eb0  Review ratchet v0, then fix the seven safety defects (v0.2)
+```
+
+Twelve stack traces across twenty-one command probes at v0, none from v0.2 on:
+the R8/R11/R13/R15/R18 error-path defects, reconstructed from history by a
+subject written years later.
+
+**Writing them found four more defects, all in the empty rows** — which is the
+argument for the whole exercise:
+
+- `verify --home <relative>` from a nested directory reddened *every* row
+  (`no heuristics.rules in ../../.ratchet`), because `verify` passed the raw
+  flag to a child process with a different working directory while the other
+  twenty-one commands resolved it through the one resolver. v0.7's notes had
+  called this "not a defect, the shape of one" — checked by hand on an empty
+  corpus, where both routes answer `0/0 rows pass` and agree.
+- `probe.ts` substituted neither `{home}` nor `{ratchet}`, so a prose
+  heuristic could not reach a frozen instrument at all. The mechanism was
+  available in `config.json` and nowhere in prose.
+- `RATCHET_HOME=""` counted as a home, so `export RATCHET_HOME=` made every
+  command fail with a blank where the path should be.
+- `adopt` confirmed a failure by checking the bad commit out a second time and
+  *did not re-run `--setup`*. Build output is untracked, so the confirmation
+  measured whichever commit was built last — every subject with a build step
+  was reported flaky and refused, and a failure caused by stale artifacts
+  would have been confirmed and stored. Found by `cli-end-to-end` on its first
+  run against history, when `adopt` refused to store its row.
+
+The last one is the pattern this repository keeps producing: a mechanism
+defined once and wired into some of its call sites. `--setup` had five call
+sites and the fifth forgot it entirely. That class has no counterexample —
+it is a completeness property over a set of call sites — so it is checked
+statically instead:
+
+```
+$ node .ratchet/tools/uniformity.js        # at 7a5b36c
+VIOLATION home-resolved-once — index.ts reads --home directly in 2 places
+VIOLATION spawn-substitutes-tokens — probe.ts observe() does not substitute {home} or {ratchet} in shell mode
+VIOLATION spawn-substitutes-tokens — probe.ts observe() does not substitute {home} or {ratchet} in direct mode
+VIOLATION setup-runner-is-single — 4 places construct a --setup run (adopt.ts, bisect.ts, replay.ts, validate.ts)
+VIOLATION setup-follows-every-checkout — adopt.ts checks out a probed commit 2 time(s) but prepares it 1 time(s)
+```
+
+`src/substitution.ts` is now the token vocabulary in one place, `runner.ts`
+and `probe.ts` both delegate to it, and `worktree.ts` owns the single
+`--setup` runner. The scanner is version-agnostic — an invariant whose
+mechanism did not exist at a commit reports `n/a` rather than passing
+silently — which is what lets it run across history at all.
+
+**And one prose heuristic more**, in [`../.ratchet/heuristics.rules`](../.ratchet/heuristics.rules):
+
+```
+heuristic test-suite
+  run      node --test ratchet/dist/test/
+  timeout  600000
+  applies  when ratchet/dist/test exists
+  measure  failing  number after "# fail"
+  measure  passing  number after "# pass"
+  rule     failing is 0
+  rule     passing is at least 159
+  because  a suite that shrinks silently is how a ratchet stops ratcheting: the
+  because  count is a floor, raised deliberately, never lowered by accident
+```
+
+Two measures, two rules, no plumbing. The `passing` floor is the ratchet
+applied to the ratchet's own coverage — adding tests keeps it satisfied,
+quietly deleting them does not. `applies when` makes it report `na` at commits
+that predate the build rather than manufacturing a failure there.
+
+If the prose form could not express the standing invariants of the tool that
+ships it, there would be no honest way to claim it expresses anyone else's.
+
 ## Build & test
 
 ```
@@ -485,8 +978,13 @@ npm run build
 npm test
 ```
 
-62 tests, including one regression test per defect closed from the v0 review
-plus the visual codec/diff/loop tests. The demo is generated by
+159 tests: one regression test per defect closed from the v0 review, the visual
+codec/diff/loop tests, the v0.7 additions — canonicalization and its
+failure modes, every extractor and predicate, the probe's three outcomes and
+its seeding, the capture gate, `guard`, the hook installer, and the
+git-sourced heuristic history — and the v0.8 additions: the token vocabulary,
+a prose heuristic reaching an instrument that lives only in the home, and
+`adopt` preparing its confirmation probe. The demo is generated by
 `node demo/setup.js`; see [demo/README.md](demo/README.md).
 
 ## What this prototype still leaves out
@@ -499,4 +997,9 @@ From the design in [../RATCHET.md](../RATCHET.md), still absent:
 - **Sampled behavioral diffs** beyond the visual pins (corpus + boundary
   catalogue snapshot sets).
 - **Metric budgets** in their baseline-relative form, and static checks.
-- The PR bot and agent attach. `--json` exists; nothing consumes it yet.
+- The agent attach: dispatching an investigation when a row goes red.
+
+The v0.6 plan — heuristics as data, validation as a capture gate, `ratchet
+adopt`, yield reporting, and the merge-landscape glue — is
+[../NEXT_STEPS_V2.md](../NEXT_STEPS_V2.md); all five are built in v0.7. What
+comes after is [../NEXT_STEPS_V3.md](../NEXT_STEPS_V3.md).

@@ -262,7 +262,6 @@ export async function recordVisual(
 ): Promise<RecordResult> {
   const home = ratchetHome(cwd);
   const configPath = path.join(home, "config.json");
-  if (!fs.existsSync(configPath)) throw new Error("no .ratchet/config.json found — run `ratchet init` first");
   const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as RatchetConfig;
   const subj: SubjectConfig | undefined = config.subjects[subject];
   if (!subj || !subj.check) {
