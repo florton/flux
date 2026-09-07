@@ -76,9 +76,18 @@ jobs:
         with:
           node-version: 20
       - run: npm ci --prefix ratchet && npm run build --prefix ratchet
+      # `--setup` is not optional here. Each probed commit is a fresh worktree
+      # with no build output, and a subject that drives the built CLI reports
+      # `na` without one — a quieter gate rather than a failing one, which is
+      # the worst way to lose coverage. RATCHET_BUILD_MODULES lets the setup
+      # script copy the dependencies already installed above instead of
+      # reaching the network once per commit.
       - name: Corpus over base..merge
+        env:
+          RATCHET_BUILD_MODULES: ${{ github.workspace }}/ratchet/node_modules
         run: >
           $RATCHET replay
           --good "${{ github.event.pull_request.base.sha }}"
           --bad  "${{ github.sha }}"
+          --setup "node {home}/tools/build.js"
           --jobs 4
