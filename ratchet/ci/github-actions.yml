@@ -1,0 +1,84 @@
+# Ratchet in CI — the gate, and the signal where merges are reviewed.
+#
+# Copy to .github/workflows/ratchet.yml and adjust the "Install the ratchet"
+# step for however your project gets the CLI. Two things happen here:
+#
+#   `ratchet guard` is the gate. It exits nonzero when the rules file will not
+#   parse, when the corpus is unreadable, or when a counterexample the corpus
+#   already holds is failing again. That is the check to make required.
+#
+#   `ratchet pr-comment` is the signal. It renders the caught/new split as
+#   markdown and posts it on the pull request, so a reviewer sees whether this
+#   branch broke something the project already knew about — in the diff view,
+#   not in a log tab nobody opens.
+#
+# The permissions below are the minimum: only the comment step writes.
+
+name: ratchet
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  # The prototype is not published, so it is invoked directly. Replace with
+  # `ratchet` once the CLI is installed on PATH.
+  RATCHET: node ${{ github.workspace }}/ratchet/dist/src/index.js
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `ratchet heuristics log` and the quarantine explanation read
+          # `git log` over the rules file; a shallow clone has none of it.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install the ratchet
+        run: npm ci --prefix ratchet && npm run build --prefix ratchet
+
+      # The gate. Add `--strict` once every subject has a validation proof: it
+      # turns "this heuristic was never shown to catch anything" from a warning
+      # into a failure.
+      - name: ratchet guard
+        run: $RATCHET guard
+
+      # The signal. `if: always()` because a failed gate is exactly the case a
+      # reviewer most needs the comment for.
+      - name: Post the caught/new split
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: $RATCHET pr-comment | gh pr comment "${{ github.event.number }}" --body-file -
+
+  # Both branches of a merge can be green while their union is not: two
+  # independently valid changes can interact. Running the corpus across
+  # base..merge is the only way to see that before it lands. Cheap to skip on
+  # a small repo; the one that matters on a busy one.
+  merge-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --prefix ratchet && npm run build --prefix ratchet
+      - name: Corpus over base..merge
+        run: >
+          $RATCHET replay
+          --good "${{ github.event.pull_request.base.sha }}"
+          --bad  "${{ github.sha }}"
+          --jobs 4

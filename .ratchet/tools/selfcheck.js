@@ -181,7 +181,13 @@ const subjects = {
       JSON.stringify([{ property: "p", counterexample: [8347] }])
     );
 
-    const report = withHome(project.home, () => capture.capture(project.root, [path.join(project.root, "cap.json")]));
+    // allowUnvalidated: this scratch project has no journal, and the gate
+    // that would refuse the capture is not what this subject is watching.
+    // Older builds ignore the unknown option, so the check still runs at the
+    // commits where the R5 bug lived.
+    const report = withHome(project.home, () =>
+      capture.capture(project.root, [path.join(project.root, "cap.json")], { allowUnvalidated: true })
+    );
     const rows = [...corpus.foldRows(corpus.readEvents(path.join(project.home, "corpus.jsonl"))).values()];
     if (rows.length !== 1) {
       fail(`expected one stored row, got ${rows.length} (${JSON.stringify(report)})`);
@@ -210,7 +216,7 @@ const subjects = {
     const capFile = path.join(project.root, "cap.json");
     fs.writeFileSync(capFile, JSON.stringify([{ property: "p", counterexample: [42] }]));
 
-    const first = withHome(project.home, () => capture.capture(project.root, [capFile]));
+    const first = withHome(project.home, () => capture.capture(project.root, [capFile], { allowUnvalidated: true }));
     if (!first.added || first.added.length !== 1) {
       fail(`the counterexample was not captured in the first place: ${JSON.stringify(first)}`);
     }
@@ -219,7 +225,7 @@ const subjects = {
     withHome(project.home, () => accept.accept(project.root, id, "intended for now", "selfcheck"));
 
     // The identical bug comes back.
-    const again = withHome(project.home, () => capture.capture(project.root, [capFile]));
+    const again = withHome(project.home, () => capture.capture(project.root, [capFile], { allowUnvalidated: true }));
     const recurred = (again.recurred || []).length;
     const skippedSilently = (again.skipped || []).some((line) => /already in corpus/.test(line));
 

@@ -3,6 +3,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { foldCorpus, isLegacyId, readCorpus, rowId, stableStringify } from "./corpus";
 import { readJournalFile } from "./journal";
+import { loadSubjects } from "./paths";
 import type { CorpusEvent, LineProblem, RatchetConfig } from "./types";
 
 export interface FsckFinding {
@@ -72,17 +73,31 @@ export function fsck(ratchetDir: string): FsckReport {
     }
   }
 
-  if (fs.existsSync(configPath)) {
+  // Subjects come from config.json and heuristics.rules together, and a
+  // rules file that will not parse is itself an integrity failure: every
+  // heuristic in it has silently stopped enforcing.
+  if (fs.existsSync(configPath) || fs.existsSync(path.join(ratchetDir, "heuristics.rules"))) {
     try {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as RatchetConfig;
+      const config = loadSubjects(ratchetDir);
       const seen = new Set<string>();
       for (const r of rows.values()) {
         if (config.subjects[r.subject] || seen.has(r.subject)) continue;
         seen.add(r.subject);
-        push("unconfigured-subject", "warning", `rows exist for subject "${r.subject}" but it has no check in config.json`);
+        push(
+          "unconfigured-subject",
+          "warning",
+          `rows exist for subject "${r.subject}" but nothing defines it — add it to config.json, or as a 'heuristic' block in heuristics.rules`
+        );
+      }
+      for (const name of config.collisions) {
+        push(
+          "unconfigured-subject",
+          "warning",
+          `"${name}" is declared both in config.json and in heuristics.rules — config.json wins; delete one`
+        );
       }
     } catch (err) {
-      push("corpus-unreadable-line", "error", `config.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      push("corpus-unreadable-line", "error", err instanceof Error ? err.message : String(err));
     }
   }
 

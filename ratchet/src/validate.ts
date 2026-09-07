@@ -4,6 +4,7 @@ import { runCheckAsync } from "./runner";
 import { appendJournal, readJournal } from "./journal";
 import { ruleHash } from "./rule";
 import { commitInfo, withWorktree } from "./worktree";
+import { loadSubjects } from "./paths";
 import type { RatchetConfig } from "./types";
 
 export interface ValidateOptions {
@@ -40,9 +41,15 @@ export interface ValidateResult {
  */
 export async function validate(cwd: string, subject: string, opts: ValidateOptions): Promise<ValidateResult> {
   const ratchetDir = opts.ratchetHome ?? process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
-  const config = JSON.parse(fs.readFileSync(path.join(ratchetDir, "config.json"), "utf8")) as RatchetConfig;
+  const config = loadSubjects(ratchetDir);
   const subj = config.subjects[subject];
-  if (!subj) throw new Error(`no subject "${subject}" in config.json`);
+  if (!subj) {
+    const names = Object.keys(config.subjects);
+    throw new Error(
+      `no subject "${subject}" is configured` +
+        (names.length ? ` — this repository has: ${names.join(", ")}` : " — this repository configures none")
+    );
+  }
 
   const input = opts.input ?? null;
   const bad = commitInfo(cwd, opts.knownBad);
@@ -52,7 +59,17 @@ export async function validate(cwd: string, subject: string, opts: ValidateOptio
     const probe = async (sha: string) => {
       session.checkout(sha);
       if (opts.setup) {
-        const s = await runCheckAsync(opts.setup, null, { cwd: session.path, shell: true, timeoutMs: 600_000 });
+        const s = await runCheckAsync(opts.setup, null, {
+          cwd: session.path,
+          shell: true,
+          timeoutMs: 600_000,
+          // The setup script needs the carried home for the same reason the
+          // check does: a build script added last month does not exist in a
+          // worktree checked out at a commit from last year, so `{home}` must
+          // resolve outside the tree being measured.
+          homeDir: session.home,
+          projectRoot: session.path,
+        });
         if (s.outcome !== "pass") throw new Error(`setup failed at ${sha.slice(0, 8)}: ${s.reason}`);
       }
       return runCheckAsync(subj.check, input, {

@@ -6,6 +6,9 @@ import type { RatchetConfig, RowState, VerifyResult } from "./types";
 import { runCheckAsync, pool } from "./runner";
 import { failureSignature, signaturesMatch } from "./signature";
 import { ruleHash } from "./rule";
+import { loadSubjects } from "./paths";
+import { explainRuleChange } from "./heuristic-history";
+import type { Heuristic } from "./heuristics";
 
 export interface VerifyOptions {
   row?: string;
@@ -50,11 +53,7 @@ export function defaultConcurrency(): number {
 
 export async function verify(cwd: string, opts: VerifyOptions): Promise<VerifyResult[]> {
   const ratchetDir = opts.ratchetHome ?? process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
-  const configPath = path.join(ratchetDir, "config.json");
-  if (!fs.existsSync(configPath)) {
-    throw new Error("no .ratchet/config.json found — run `ratchet init` first");
-  }
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as RatchetConfig;
+  const config = loadSubjects(ratchetDir);
   const corpusPath = path.join(ratchetDir, "corpus.jsonl");
 
   // A corpus that cannot be fully read cannot certify anything: a row hidden
@@ -126,7 +125,7 @@ export async function verify(cwd: string, opts: VerifyOptions): Promise<VerifyRe
   if (opts.json) {
     console.log(JSON.stringify({ results, counts: countOutcomes(results) }, null, 2));
   } else if (!opts.quiet) {
-    printResults(results, new Map(rows.map((r) => [r.id, r])));
+    printResults(results, new Map(rows.map((r) => [r.id, r])), { cwd, ratchetDir, config });
   }
   return results;
 }
@@ -140,7 +139,13 @@ export function countOutcomes(results: VerifyResult[]): { pass: number; fail: nu
   };
 }
 
-function printResults(results: VerifyResult[], byId: Map<string, RowState>): void {
+interface PrintContext {
+  cwd: string;
+  ratchetDir: string;
+  config: { subjects: Record<string, { heuristic?: Heuristic }> };
+}
+
+function printResults(results: VerifyResult[], byId: Map<string, RowState>, ctx?: PrintContext): void {
   for (const r of results) {
     const row = byId.get(r.id);
     const shown = row ? ` ${inputString(row)}` : "";
@@ -150,7 +155,15 @@ function printResults(results: VerifyResult[], byId: Map<string, RowState>): voi
       console.log(`− ${r.id} ${r.subject}${shown} — n/a: ${r.reason}`);
     } else if (r.outcome === "quarantine") {
       console.log(`? ${r.id} ${r.subject}${shown} — quarantined: ${r.reason}`);
-      console.log(`    behavior changed under an edited rule — review, then \`ratchet reaffirm ${r.id}\` or \`ratchet accept ${r.id}\``);
+      // "rule fd59 became a3b1" tells a reviewer nothing. When the subject is
+      // prose and git still holds the old version, show the clause that moved.
+      const h = ctx?.config.subjects[r.subject]?.heuristic;
+      if (h && ctx && row?.ruleHash) {
+        for (const line of explainRuleChange(ctx.cwd, ctx.ratchetDir, r.subject, row.ruleHash, h) ?? []) {
+          console.log(`    ${line}`);
+        }
+      }
+      console.log(`    review, then \`ratchet reaffirm ${r.id} --reason "..."\` (the expectation stands) or \`ratchet accept ${r.id} --reason "..."\` (it does not)`);
     } else {
       const drift = r.signatureDrift ? "  [!] different failure than the one captured" : "";
       console.log(`✗ ${r.id} ${r.subject}${shown} — ${r.reason ?? "failed"}${drift}`);
@@ -167,6 +180,14 @@ function printResults(results: VerifyResult[], byId: Map<string, RowState>): voi
   if (staleRule > 0) {
     console.log(
       `${staleRule} passing row(s) are pinned to an older version of their rule — \`ratchet reaffirm\` to re-pin them`
+    );
+  }
+
+  // A gate that is mostly "not applicable" is green while checking almost
+  // nothing, which is the quietest way for this tool to become theatre.
+  if (results.length > 0 && na / results.length > 0.5) {
+    console.log(
+      `${na} of ${results.length} rows reported n/a — most of this gate is not checking anything here`
     );
   }
 

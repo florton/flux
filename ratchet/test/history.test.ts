@@ -9,6 +9,7 @@ import { readJournal } from "../src/journal";
 import { ruleHash, collectOwned } from "../src/rule";
 import { runCheck } from "../src/runner";
 import { capture } from "../src/capture";
+import { proveSubjects } from "./proof";
 import { verify } from "../src/verify";
 import { accept, reaffirm } from "../src/accept";
 import { replay, sample, parsePolicy } from "../src/replay";
@@ -132,6 +133,7 @@ test("a row whose rule was edited is quarantined, not treated as a regression", 
   fs.writeFileSync(path.join(root, "cap.json"), JSON.stringify([{ property: "p", counterexample: [5] }]), "utf8");
 
   await withHome(home, async () => {
+    proveSubjects(home, root);
     capture(root, [path.join(root, "cap.json")]);
     const row = rows(home)[0];
     assert.ok(row.ruleHash, "capture records the rule that justified the row");
@@ -155,7 +157,7 @@ test("a row whose rule was edited is quarantined, not treated as a regression", 
     assert.equal(res[0].ruleChanged, false);
     assert.throws(() => reaffirm(root, row.id, "again", "alice"), /already pinned/);
 
-    const j = readJournal(path.join(home, "journal.jsonl"));
+    const j = readJournal(path.join(home, "journal.jsonl")).filter((e) => e.kind !== "validation");
     assert.equal(j.length, 1);
     assert.match(j[0].text, /reaffirmed under edited rule/);
   });
@@ -220,6 +222,7 @@ test("a failure must reproduce twice to enter the corpus", async () => {
   fs.writeFileSync(path.join(root, "cap.json"), JSON.stringify([{ property: "p", counterexample: [1] }]), "utf8");
 
   await withHome(home, async () => {
+    proveSubjects(home, root);
     const rep = capture(root, [path.join(root, "cap.json")]);
     assert.equal(rep.added.length, 0, "a flake must not become a permanent row");
     assert.equal(rep.flaky.length, 1);
@@ -247,6 +250,7 @@ test("--confirm 1 opts out of the second run", async () => {
   fs.writeFileSync(path.join(root, "cap.json"), JSON.stringify([{ property: "p", counterexample: [1] }]), "utf8");
 
   await withHome(home, async () => {
+    proveSubjects(home, root);
     assert.equal(capture(root, [path.join(root, "cap.json")], { confirmations: 1 }).added.length, 1);
   });
 });

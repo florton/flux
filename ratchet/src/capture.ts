@@ -8,6 +8,8 @@ import { minimize, DEFAULT_BUDGET } from "./shrink";
 import { runCheck } from "./runner";
 import { failureSignature, signaturesMatch } from "./signature";
 import { ruleHash } from "./rule";
+import { loadSubjects } from "./paths";
+import { validatedSubjects } from "./validate";
 
 export interface Recurrence {
   id: string;
@@ -29,6 +31,8 @@ export interface CaptureReport {
   unconfigured: string[];
   /** Counterexamples whose repeated runs disagreed — a flaky check. */
   flaky: string[];
+  /** Bindings refused because their subject has no validation proof. */
+  unvalidated: string[];
 }
 
 export interface CaptureOptions {
@@ -41,6 +45,16 @@ export interface CaptureOptions {
    * corpus. Flakes are the fastest way to make a corpus untrustworthy."
    */
   confirmations?: number;
+  /**
+   * Capture from a subject that has never been proven to fail on a known bug.
+   *
+   * Off by default, and that default is the point: `ratchet validate` existed
+   * but nothing made anyone run it, so the protocol was a convention, and a
+   * convention erodes. The cheapest place to catch a vacuous check is before
+   * its first row exists — after that the corpus carries a green light over
+   * nothing, and generated coverage heuristics arrive in bulk.
+   */
+  allowUnvalidated?: boolean;
 }
 
 interface FastCheckCapture {
@@ -221,11 +235,7 @@ function parseTap(filePath: string): SubjectBinding[] {
 
 export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}): CaptureReport {
   const ratchetDir = process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
-  const configPath = path.join(ratchetDir, "config.json");
-  if (!fs.existsSync(configPath)) {
-    throw new Error("no .ratchet/config.json found — run `ratchet init` first");
-  }
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as RatchetConfig;
+  const config = loadSubjects(ratchetDir);
 
   let bindings: SubjectBinding[] = [];
   for (const input of inputs) {
@@ -249,7 +259,14 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
   const corpusPath = path.join(ratchetDir, "corpus.jsonl");
   const journalPath = path.join(ratchetDir, "journal.jsonl");
   const commit = currentCommit(cwd);
-  const report: CaptureReport = { added: [], skipped: [], recurred: [], unconfigured: [], flaky: [] };
+  const report: CaptureReport = { added: [], skipped: [], recurred: [], unconfigured: [], flaky: [], unvalidated: [] };
+
+  // The gate, resolved once: a subject is trusted when the journal holds a
+  // validation proof recorded against the rule it is running under now.
+  // Editing the check invalidates its own proof, which is what keeps this
+  // from becoming a one-time formality.
+  const proven = validatedSubjects(cwd, ratchetDir, config);
+  const exceptionsJournaled = new Set<string>();
   const confirmations = Math.max(1, opts.confirmations ?? 2);
   const rows = foldRows(readEvents(corpusPath));
 
@@ -263,6 +280,31 @@ export function capture(cwd: string, inputs: string[], opts: CaptureOptions = {}
     if (!subj) {
       report.unconfigured.push(b.subject);
       continue;
+    }
+
+    // Who checks the checkers, as a gate rather than a ritual. A subject that
+    // passes through history's known bugs is too weak to watch anything, and
+    // a row captured from it is a permanent green light over nothing.
+    if (!proven.has(b.subject)) {
+      if (!opts.allowUnvalidated) {
+        report.unvalidated.push(b.subject);
+        continue;
+      }
+      // The escape hatch exists for a subject's very first use, before any
+      // known-bad commit is known. It is journaled so the exception is on
+      // the record rather than invisible in someone's shell history.
+      if (!exceptionsJournaled.has(b.subject)) {
+        exceptionsJournaled.add(b.subject);
+        appendJournal(journalPath, {
+          at: new Date().toISOString(),
+          kind: "decision",
+          actor: opts.actor ?? "human",
+          text:
+            `captured from "${b.subject}" with --allow-unvalidated: no proof this subject fails on a known bug` +
+            ` (rule ${ruleHash(b.subject, subj, cwd)})`,
+          commit,
+        });
+      }
     }
 
     const runOpts = { cwd, shell: subj.shell, timeoutMs: subj.timeoutMs, testName: b.test, homeDir: ratchetDir };

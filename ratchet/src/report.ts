@@ -1,6 +1,13 @@
 import * as path from "path";
 import { readCorpus, foldCorpus, stableStringify } from "./corpus";
 import { readJournalFile } from "./journal";
+import { loadSubjects } from "./paths";
+import { validatedSubjects } from "./validate";
+import { yieldReport } from "./yield";
+
+function ratchetHome(cwd: string): string {
+  return process.env.RATCHET_HOME ?? path.join(cwd, ".ratchet");
+}
 
 export interface ReportData {
   rows: number;
@@ -136,6 +143,30 @@ export function report(cwd: string): string {
   }
   if (d.unreadableLines > 0) {
     lines.push(`[!] ${d.unreadableLines} unreadable line(s) — run \`ratchet fsck\``);
+  }
+
+  // Which heuristics have stopped producing evidence. A subject that has
+  // never fired and one that guards a stable invariant look identical from
+  // the outside; the portfolio is the human's to manage, so say which is which.
+  try {
+    const config = loadSubjects(ratchetHome(cwd));
+    const y = yieldReport(ratchetHome(cwd), config, validatedSubjects(cwd, ratchetHome(cwd), config), {
+      fromRules: config.fromRules,
+    });
+    const unvalidated = y.subjects.filter((s) => !s.validated);
+    if (y.stale.length > 0) {
+      lines.push(
+        `quiet over ${y.staleAfterDays}d: ${y.stale.map((s) => `${s.subject} (${s.quietDays}d)`).join(", ")}`
+      );
+    }
+    if (unvalidated.length > 0) {
+      lines.push(
+        `[!] ${unvalidated.length} subject(s) with no validation proof for their current rule: ${unvalidated.map((s) => s.subject).join(", ")}`
+      );
+    }
+  } catch {
+    // A config the report cannot read is `fsck`'s business to complain about,
+    // not a reason for the churn numbers above to go missing.
   }
 
   if (d.latestCaptures.length > 0) {

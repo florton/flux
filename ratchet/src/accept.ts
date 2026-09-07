@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { appendEvent, findRow } from "./corpus";
 import { ruleHash } from "./rule";
+import { loadSubjects } from "./paths";
 import type { RatchetConfig } from "./types";
 import { appendJournal } from "./journal";
 import type { CorpusEvent } from "./types";
@@ -78,7 +79,7 @@ export function reaffirm(cwd: string, id: string, reason: string, actor: string)
   const row = findRow(corpusPath, id);
   if (!row) throw new Error(`no row ${id} in corpus`);
 
-  const config = JSON.parse(fs.readFileSync(path.join(ratchetDir, "config.json"), "utf8")) as RatchetConfig;
+  const config = loadSubjects(ratchetDir);
   const subj = config.subjects[row.subject];
   if (!subj) throw new Error(`no subject config for "${row.subject}"`);
   const current = ruleHash(row.subject, subj, cwd);

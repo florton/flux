@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { capture } from "../src/capture";
+import { proveSubjects } from "./proof";
 import { foldRows, readEvents } from "../src/corpus";
 import type { RowState } from "../src/types";
 
@@ -35,6 +36,7 @@ function scratch(names: string[]): { home: string; root: string } {
       `process.exit(1);\n`,
     "utf8"
   );
+  proveSubjects(home, root);
   return { home, root };
 }
 

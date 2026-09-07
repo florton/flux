@@ -10,6 +10,7 @@ import { ddmin, shrinkNumber, minimize } from "../src/shrink";
 import { tokenize } from "../src/runner";
 import { failureSignature } from "../src/signature";
 import { capture } from "../src/capture";
+import { proveSubjects } from "./proof";
 import { verify } from "../src/verify";
 import { accept, reopen } from "../src/accept";
 import { report, reportData } from "../src/report";
@@ -44,6 +45,7 @@ process.exit(0);
 `,
     "utf8"
   );
+  proveSubjects(home, root);
   return { home, root };
 }
 
@@ -470,7 +472,9 @@ test("capture, dedup, verify, accept, reopen, report", async () => {
     accept(root, id, "1000 is the new ceiling", "alice");
     assert.equal((await verify(root, { quiet: true, ratchetHome: home })).length, 0, "archived rows stop enforcing");
 
-    const j = readJournal(path.join(home, "journal.jsonl"));
+    // The decision log, which is what the ceremony writes. Validation proofs
+    // live in the same file but are not decisions.
+    const j = readJournal(path.join(home, "journal.jsonl")).filter((e) => e.kind !== "validation");
     assert.equal(j.length, 1);
     assert.equal(j[0].kind, "accept");
     assert.equal(j[0].corpusId, id);

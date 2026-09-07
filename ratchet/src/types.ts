@@ -1,5 +1,13 @@
 export interface SubjectConfig {
   check: string;
+  /**
+   * Set when this subject was compiled from a prose heuristic in
+   * `.ratchet/heuristics.rules` rather than declared in config.json. It is
+   * never serialized to config.json; it travels in memory so that the rule
+   * hash, the failure output, and `ratchet heuristics` can speak in the
+   * author's own clauses instead of in an opaque command string.
+   */
+  heuristic?: import("./heuristics").Heuristic;
   captureProperty?: string;
   /**
    * Run `check` through a shell. Off by default: the command is tokenized

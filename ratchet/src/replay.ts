@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { verify, countOutcomes } from "./verify";
 import { runCheckAsync, pool } from "./runner";
+import { loadSubjects } from "./paths";
 import { commitRange, environment, withWorktrees, type CommitInfo, type Environment, type Session } from "./worktree";
 import type { RatchetConfig, VerifyResult } from "./types";
 
@@ -106,7 +107,7 @@ export function sample(commits: CommitInfo[], policy: SamplePolicy): CommitInfo[
  * the same at every commit.
  */
 async function runSubjects(session: Session, only?: string): Promise<VerifyResult[]> {
-  const config = JSON.parse(fs.readFileSync(path.join(session.home, "config.json"), "utf8")) as RatchetConfig;
+  const config = loadSubjects(session.home);
   const names = Object.keys(config.subjects).filter((n) => !only || n === only);
   const out: VerifyResult[] = [];
   for (const name of names) {
@@ -116,6 +117,7 @@ async function runSubjects(session: Session, only?: string): Promise<VerifyResul
       shell: subj.shell,
       timeoutMs: subj.timeoutMs,
       homeDir: session.home,
+      projectRoot: session.path,
     });
     out.push({
       id: name,
@@ -156,6 +158,11 @@ export async function replay(cwd: string, opts: ReplayOptions): Promise<ReplayRe
           cwd: session.path,
           shell: true,
           timeoutMs: 600_000,
+          // A build script added last month does not exist in a worktree
+          // checked out at a commit from last year: `{home}` must resolve to
+          // the carried home, exactly as it does for the check itself.
+          homeDir: session.home,
+          projectRoot: session.path,
         });
         if (s.outcome !== "pass") {
           return {

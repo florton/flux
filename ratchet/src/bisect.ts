@@ -41,7 +41,17 @@ export async function bisect(
       probes++;
       session.checkout(sha);
       if (opts.setup) {
-        const s = await runCheckAsync(opts.setup, null, { cwd: session.path, shell: true, timeoutMs: 600_000 });
+        const s = await runCheckAsync(opts.setup, null, {
+          cwd: session.path,
+          shell: true,
+          timeoutMs: 600_000,
+          // The setup script needs the carried home for the same reason the
+          // check does: a build script added last month does not exist in a
+          // worktree checked out at a commit from last year, so `{home}` must
+          // resolve outside the tree being measured.
+          homeDir: session.home,
+          projectRoot: session.path,
+        });
         if (s.outcome !== "pass") throw new Error(`setup failed at ${sha.slice(0, 8)}: ${s.reason}`);
       }
       const results = await verify(session.path, { row: id, quiet: true, ratchetHome: session.home });

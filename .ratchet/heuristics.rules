@@ -1,0 +1,21 @@
+# The ratchet's own prose heuristics.
+#
+# The six subjects in config.json are checks of the checker: each reproduces a
+# defect this repository actually shipped, and each needs arbitrary computation
+# (scratch corpora, merge simulation, PNG round-trips), so they stay scripts.
+#
+# This one is the other half of the argument -- a standing invariant that needs
+# no plumbing at all, and so is written as data instead of as code. If the prose
+# form cannot express the invariants of the tool that ships it, it cannot be
+# claimed to express anyone else's.
+
+heuristic test-suite
+  run      node --test ratchet/dist/test/
+  timeout  600000
+  applies  when ratchet/dist/test exists
+  measure  failing  number after "# fail"
+  measure  passing  number after "# pass"
+  rule     failing is 0
+  rule     passing is at least 148
+  because  a suite that shrinks silently is how a ratchet stops ratcheting: the
+  because  count is a floor, raised deliberately, never lowered by accident
