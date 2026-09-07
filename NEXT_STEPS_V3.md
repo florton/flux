@@ -1,8 +1,9 @@
 # Ratchet — Next Steps v3
 
 > Supersedes [NEXT_STEPS_V2.md](NEXT_STEPS_V2.md) as the plan. That file
-> remains the v0.6-era record. This file is the v0.7 plan. What exists is in
-> [ratchet/README.md](ratchet/README.md).
+> remains the v0.6-era record. This file is the v0.7 plan; **item 1 is built
+> and is v0.8** — what it turned up is recorded under it, and the rest of the
+> list stands. What exists is in [ratchet/README.md](ratchet/README.md).
 
 ## What v0.7 closed
 
@@ -118,6 +119,17 @@ nested directory and they agree — so this is not a defect, it is the *shape* o
 one, sitting in the codebase unremarked. Nothing fails when the twenty-third
 command picks a third route.
 
+> **Corrected 2026-09-07.** It *was* a defect. The hand check that cleared it
+> was run against a corpus with no rows, where both routes answer
+> `0/0 rows pass` and cannot disagree. With one row, `verify --home` given a
+> relative path from a nested directory reddens every row —
+> `no heuristics.rules in ../../.ratchet` — because the raw flag reaches a
+> child process whose working directory is the repository root, not the one
+> the path was written against. `cli-end-to-end` found it on its first run.
+> The lesson is about the check, not the flag: a uniformity check performed on
+> empty state proves nothing, which is the same failure as a subject that has
+> never been proven able to fail.
+
 **On the feeling that every pass finds more bugs.** Measured rather than felt:
 v0 was 868 lines of `src` with 21 recorded defects (~24 per 1,000 lines). This
 pass added ~2,700 lines against a 7,006-line `src` and found ~10 (~3.7 per
@@ -137,7 +149,54 @@ reading, not to explain it away. Item 1 below is that response.
 
 ## Next pieces, in priority order
 
-### 1. Cover the class where the defects actually are
+### 1. Cover the class where the defects actually are — **built (v0.8)**
+
+> **Outcome.** Three subjects, `cli-end-to-end`, `cli-errors-are-messages` and
+> `source-uniformity`, all prose, all adopted against real history and
+> validated by observation. The corpus went from five rows in one class to
+> eight rows across four. Writing them found four defects in the empty rows:
+>
+> - **`verify --home <relative>` from a nested directory reddened every row.**
+>   `verify` passed the raw flag to a child process with a different working
+>   directory; the other twenty-one commands used the one resolver. This is
+>   the thing recorded below as "not a defect, the *shape* of one" — the hand
+>   check that cleared it was run on an empty corpus, where both routes answer
+>   `0/0 rows pass` and cannot disagree. With one row they disagree.
+> - **`probe.ts` substituted neither `{home}` nor `{ratchet}`**, so a prose
+>   heuristic could not reach a frozen instrument at all. The mechanism was
+>   available in `config.json` and nowhere in prose — which is also why the
+>   three new subjects could not have been written before it was fixed.
+> - **`RATCHET_HOME=""` counted as a home**, so `export RATCHET_HOME=` made
+>   every command fail with a blank where the path should be.
+> - **`adopt` did not re-run `--setup` before its confirmation probe.** Build
+>   output is untracked, so `git checkout --force` left the previous probe's
+>   artifacts in the worktree and the confirmation measured whichever commit
+>   was built last. Every subject with a build step was reported flaky and
+>   refused; in the other direction, a failure caused by stale artifacts would
+>   have been confirmed and stored as a row. Found by `cli-end-to-end` on its
+>   first run against history, when `adopt` refused to store its own row.
+>
+> That last one is worth stating plainly: **the new subject's first act was to
+> find a defect in the machinery that was arming it.** `--setup` had five call
+> sites and the fifth forgot it entirely — the same partial-application shape,
+> for the fourth time. It is now `source-uniformity`'s fifth invariant.
+>
+> Two things the acceptance criteria below wanted and did not get, stated
+> rather than quietly dropped:
+>
+> - **"Each of the eleven is captured as a corpus row"** is not what happened,
+>   and on inspection is not what should. A row is a *counterexample*, and
+>   `capture` re-runs the check and requires it to fail twice before storing
+>   one. Ten of the eleven were fixed in the working tree and never committed
+>   broken, so there is no commit at which they reproduce; manufacturing
+>   eleven fault-injection commits to capture against would put fake history
+>   in the repository to satisfy a count. Instead each defect is a *named
+>   scenario* inside the driver, and the row is captured at the commit where
+>   the subject genuinely fails. `cli-end-to-end` has 13 scenarios and 1 row.
+> - **The `{home}` shell-mode revert** turns `source-uniformity` red, as asked
+>   — but that hole was fixed in `7a5b36c`, so the subject is validated
+>   against `868747a`, where it was still open, together with the `--setup`
+>   `homeDir` omission that shipped alongside it.
 
 The diagnosis above says the six self-host subjects are all one shape. Two
 subjects would close most of the gap, and both are cheap now — which they were
@@ -254,11 +313,16 @@ application.
 
 ## Limitations to keep disclosed
 
-- **The self-host corpus covers one class of defect.** Its five rows are all
-  corpus and data-structure semantics; the process boundary, the CLI surface
-  and the error paths have no rows at all. `ratchet guard` passing on this
-  repository means the five known data-structure bugs have not returned — it
-  does not mean the tool works. See the finding above and item 1.
+- **The self-host corpus now covers four classes, and still not packaging.**
+  v0.8 added rows for the process boundary, the CLI surface and the error
+  paths (item 1). Packaging and hygiene — R16, R19, R21 — still have none, and
+  neither does capture-path routing except as it is exercised incidentally by
+  the end-to-end driver. `ratchet guard` passing means eight known bugs have
+  not returned; it is no longer only five, and it is still not "the tool
+  works".
+- **The end-to-end subject is the slowest thing in the gate**, about 17 s
+  against roughly 6 s for the error-path prober and 0.1 s for the static
+  scanner. That is fine in CI and noticeable in a pre-commit hook.
 - The catch rate undercounts (item 4).
 - `seed` seeds `Math.random` in Node processes only. A `crypto`- or
   clock-driven instrument, or a non-Node one, is not made deterministic —

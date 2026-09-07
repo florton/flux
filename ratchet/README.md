@@ -1,4 +1,4 @@
-# Ratchet — v0.7 prototype
+# Ratchet — v0.8 prototype
 
 Regression memory for AI-assisted development. The design sketch is
 [../RATCHET.md](../RATCHET.md); this folder is the working implementation.
@@ -23,6 +23,17 @@ Regression memory for AI-assisted development. The design sketch is
 > it was written for in one command. `ratchet heuristics log` reads a
 > heuristic's change history out of git, and a quarantine now shows **which
 > clause moved**. 153 tests.
+>
+> **v0.8 puts the corpus where the bugs are.** Measuring why the tool's own
+> gate stayed green through ten of its own defects showed that all six
+> self-hosted subjects checked a *data structure*, while sixteen of the
+> twenty-one v0 defects sat at the process boundary, on the CLI surface or in
+> an error path. Three new subjects cover those classes: an end-to-end CLI
+> driver, an error-path prober over every command the binary lists, and static
+> uniformity invariants over the source — the only mechanism that catches a
+> mechanism wired into some of its call sites and not others. Writing them
+> found four more defects, including one in `adopt` that made every buildable
+> subject look flaky. 159 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; the heuristics are plain text; everything is a file git
@@ -857,18 +868,86 @@ they tested `minimize` and `foldRows` in isolation, while the defects lived in
 the *capture* path that calls them, so they passed straight through the bug.
 That is the protocol working as intended.
 
-**What these five rows do not cover.** All five are corpus and
+**What those five rows did not cover.** All five are corpus and
 data-structure semantics — fold order, id collision, reduction slippage, dedup
 partitioning, stringify injectivity. They are the defects a scratch corpus and
 a `deepStrictEqual` can reach. Of the twenty-one defects in the v0 review,
-sixteen sat at the process boundary, on the CLI surface, or in the error paths,
-and none of those has a row. So `ratchet verify` passing on this repository
-means five known data-structure bugs have not returned; it does not mean the
-tool is working. The gap, its measurement, and the two subjects that would
-close it are recorded in
+sixteen sat at the process boundary, on the CLI surface, or in the error
+paths, and none of those had a row: the corpus had been built where it was
+easy rather than where the bugs live. The measurement is in
 [NEXT_STEPS_V3.md](../NEXT_STEPS_V3.md#the-finding-that-should-shape-v08-the-corpus-is-in-the-wrong-place).
+v0.8 closes it with three more subjects, below.
 
-**And one prose heuristic**, in [`../.ratchet/heuristics.rules`](../.ratchet/heuristics.rules):
+### Covering the classes the corpus was missing
+
+Three subjects, all prose, each running a *frozen instrument* out of `{home}`
+so `replay` and `adopt` measure every commit with today's driver rather than
+whatever that commit happened to contain.
+
+| Subject | What it drives | Adopted against |
+|---|---|---|
+| `cli-end-to-end` | 13 scenarios spawning the real binary in real scratch git repositories — `init`, `fmt`, `adopt`, `verify` red with the right witness, quarantine and its prose diff, `reaffirm`, the capture gate, `--home` from a nested directory, `seed`, `guard`, the hook installer | `7a5b36c` (v0.7) |
+| `cli-errors-are-messages` | every command in the binary's *own usage*, against a corpus that took a bad merge, an unparseable rules file, and a home that was never initialized | `76865c4` (v0) |
+| `source-uniformity` | five static invariants over `ratchet/src` — the only mechanism that catches partial application | `7a5b36c` (v0.7) |
+
+Each was adopted with `ratchet adopt`, so each is validated the same way the
+five scripted subjects are: observed failing where a defect actually lived and
+passing where it was fixed.
+
+```
+$ ratchet adopt cli-errors-are-messages --good 76865c4^ --bad 0d710eb --setup "node {home}/tools/build.js"
+  ✗ 76865c48  ratchet v0                              traces measured 12, rule says "traces is 0"
+  ✗ 4abc1d54  ratchet experiments                     traces measured 12, rule says "traces is 0"
+  ✓ 0d710eb0  Review ratchet v0, then fix the seven safety defects (v0.2)
+```
+
+Twelve stack traces across twenty-one command probes at v0, none from v0.2 on:
+the R8/R11/R13/R15/R18 error-path defects, reconstructed from history by a
+subject written years later.
+
+**Writing them found four more defects, all in the empty rows** — which is the
+argument for the whole exercise:
+
+- `verify --home <relative>` from a nested directory reddened *every* row
+  (`no heuristics.rules in ../../.ratchet`), because `verify` passed the raw
+  flag to a child process with a different working directory while the other
+  twenty-one commands resolved it through the one resolver. v0.7's notes had
+  called this "not a defect, the shape of one" — checked by hand on an empty
+  corpus, where both routes answer `0/0 rows pass` and agree.
+- `probe.ts` substituted neither `{home}` nor `{ratchet}`, so a prose
+  heuristic could not reach a frozen instrument at all. The mechanism was
+  available in `config.json` and nowhere in prose.
+- `RATCHET_HOME=""` counted as a home, so `export RATCHET_HOME=` made every
+  command fail with a blank where the path should be.
+- `adopt` confirmed a failure by checking the bad commit out a second time and
+  *did not re-run `--setup`*. Build output is untracked, so the confirmation
+  measured whichever commit was built last — every subject with a build step
+  was reported flaky and refused, and a failure caused by stale artifacts
+  would have been confirmed and stored. Found by `cli-end-to-end` on its first
+  run against history, when `adopt` refused to store its row.
+
+The last one is the pattern this repository keeps producing: a mechanism
+defined once and wired into some of its call sites. `--setup` had five call
+sites and the fifth forgot it entirely. That class has no counterexample —
+it is a completeness property over a set of call sites — so it is checked
+statically instead:
+
+```
+$ node .ratchet/tools/uniformity.js        # at 7a5b36c
+VIOLATION home-resolved-once — index.ts reads --home directly in 2 places
+VIOLATION spawn-substitutes-tokens — probe.ts observe() does not substitute {home} or {ratchet} in shell mode
+VIOLATION spawn-substitutes-tokens — probe.ts observe() does not substitute {home} or {ratchet} in direct mode
+VIOLATION setup-runner-is-single — 4 places construct a --setup run (adopt.ts, bisect.ts, replay.ts, validate.ts)
+VIOLATION setup-follows-every-checkout — adopt.ts checks out a probed commit 2 time(s) but prepares it 1 time(s)
+```
+
+`src/substitution.ts` is now the token vocabulary in one place, `runner.ts`
+and `probe.ts` both delegate to it, and `worktree.ts` owns the single
+`--setup` runner. The scanner is version-agnostic — an invariant whose
+mechanism did not exist at a commit reports `n/a` rather than passing
+silently — which is what lets it run across history at all.
+
+**And one prose heuristic more**, in [`../.ratchet/heuristics.rules`](../.ratchet/heuristics.rules):
 
 ```
 heuristic test-suite
@@ -878,7 +957,7 @@ heuristic test-suite
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   rule     failing is 0
-  rule     passing is at least 148
+  rule     passing is at least 159
   because  a suite that shrinks silently is how a ratchet stops ratcheting: the
   because  count is a floor, raised deliberately, never lowered by accident
 ```
@@ -899,11 +978,13 @@ npm run build
 npm test
 ```
 
-153 tests: one regression test per defect closed from the v0 review, the visual
-codec/diff/loop tests, and the v0.7 additions — canonicalization and its
+159 tests: one regression test per defect closed from the v0 review, the visual
+codec/diff/loop tests, the v0.7 additions — canonicalization and its
 failure modes, every extractor and predicate, the probe's three outcomes and
 its seeding, the capture gate, `guard`, the hook installer, and the
-git-sourced heuristic history. The demo is generated by
+git-sourced heuristic history — and the v0.8 additions: the token vocabulary,
+a prose heuristic reaching an instrument that lives only in the home, and
+`adopt` preparing its confirmation probe. The demo is generated by
 `node demo/setup.js`; see [demo/README.md](demo/README.md).
 
 ## What this prototype still leaves out
