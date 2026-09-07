@@ -16,7 +16,7 @@ heuristic test-suite
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   rule     failing is 0
-  rule     passing is at least 158
+  rule     passing is at least 159
   because  a suite that shrinks silently is how a ratchet stops ratcheting: the
   because  count is a floor, raised deliberately, never lowered by accident
 
@@ -75,7 +75,7 @@ heuristic source-uniformity
   measure  violations  count of lines matching "VIOLATION "
   measure  declared  number after "invariants declared:"
   rule     violations is 0
-  rule     declared is at least 4
+  rule     declared is at least 5
   because  partial application of a mechanism -- defined once, wired into some
   because  of its call sites -- has shipped four times in three versions, and a
   because  corpus row cannot catch it: a row is one counterexample and this is

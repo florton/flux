@@ -122,7 +122,20 @@ export async function adopt(cwd: string, subject: string, opts: AdoptOptions): P
     // Confirm at the failing commit before storing anything, exactly as a
     // capture would: a heuristic that fails once and passes on the retry is
     // measuring noise, and a noisy row poisons every later verify.
+    //
+    // Setup runs again after the checkout, and that is not optional. Build
+    // output is not tracked, so `git checkout --force` leaves the *previous*
+    // probe's artifacts in place: without this, the confirmation measures the
+    // commit whose build happens to be sitting in the worktree. It reported
+    // every buildable subject as flaky — and, in the other direction, would
+    // have confirmed a failure that came from stale artifacts.
     session.checkout(firstFailing.sha);
+    if (opts.setup) {
+      const s = await runSetup(session, opts.setup);
+      if (s.outcome !== "pass") {
+        return { firstFailing, confirmation: { ...s, reason: `setup failed on the confirmation run: ${s.reason}` } };
+      }
+    }
     const again = await runCheckAsync(subj.check, null, {
       cwd: session.path,
       shell: subj.shell,

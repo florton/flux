@@ -499,9 +499,23 @@ ${green.out.trim()}`);
    * honored the flag in two of eight commands, and nothing failed.
    */
   "home-flag-reaches-every-command"() {
-    needs("init");
+    needs("init", "adopt");
     const { dir, good } = measuredProject();
-    if (commands().has("adopt")) ratchet(dir, ["adopt", "widgets-shipped", "--good", good]);
+
+    // The precondition, asserted rather than assumed. `--home` resolves the
+    // same either way on an *empty* corpus — both routes answer "0/0 rows
+    // pass" — so a scenario that let the row go missing would report a pass
+    // having compared nothing. That is the green light over nothing this
+    // whole tool exists to refuse, and it belongs least of all in its own
+    // driver.
+    const armed = ratchet(dir, ["adopt", "widgets-shipped", "--good", good]);
+    const corpus = path.join(dir, ".ratchet", "corpus.jsonl");
+    if (!fs.existsSync(corpus) || fs.readFileSync(corpus, "utf8").trim() === "") {
+      return fail(
+        "home-flag-reaches-every-command",
+        `could not arm a row to compare with, so nothing was compared: adopt exited ${armed.status}:\n${armed.out.trim()}`
+      );
+    }
 
     const nested = path.join(dir, "tools", "deep");
     fs.mkdirSync(nested, { recursive: true });

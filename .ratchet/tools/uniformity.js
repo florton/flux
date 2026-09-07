@@ -52,6 +52,7 @@ const DECLARED = [
   "spawn-substitutes-tokens",
   "setup-carries-the-home",
   "setup-runner-is-single",
+  "setup-follows-every-checkout",
 ];
 
 const violations = [];
@@ -270,6 +271,43 @@ function setupCarriesHome() {
   }
 }
 
+/**
+ * I5. Every checkout of a probed commit is followed by the setup that
+ * prepares it.
+ *
+ * `adopt` checked out the failing commit a second time to confirm the
+ * failure, and did not re-run setup. Build output is not tracked, so
+ * `git checkout --force` leaves the previous probe's artifacts in the
+ * worktree: the confirmation measured whichever commit had been built last.
+ * Every subject that needs a build was therefore reported flaky and refused —
+ * and in the other direction a failure caused by stale artifacts would have
+ * been confirmed and stored as a row.
+ *
+ * A file that runs setup at all has said its probes need preparing; a
+ * checkout in that file with no setup after it is a probe running against
+ * whatever was left behind.
+ */
+function setupFollowsEveryCheckout() {
+  const files = fs.existsSync(SRC) ? fs.readdirSync(SRC).filter((f) => f.endsWith(".ts")) : [];
+  let sawAny = false;
+  for (const file of files) {
+    const source = code(read(file));
+    const setups = (source.match(/runSetup\s*\(|runCheckAsync\s*\(\s*[A-Za-z_.]*setup\b/g) ?? []).length;
+    if (setups === 0) continue;
+    sawAny = true;
+    const checkouts = (source.match(/\.checkout\s*\(/g) ?? []).length;
+    if (checkouts > setups) {
+      violate(
+        "setup-follows-every-checkout",
+        `${file} checks out a probed commit ${checkouts} time(s) but prepares it ${setups} time(s) — ` +
+          `a probe after the unprepared checkout measures the build left behind by the previous one`
+      );
+    }
+  }
+  if (!sawAny) return skip("setup-follows-every-checkout", "nothing in this tree runs a --setup command");
+  apply("setup-follows-every-checkout");
+}
+
 /* -------------------------------------------------------------------------- */
 
 if (!fs.existsSync(SRC)) {
@@ -281,6 +319,7 @@ try {
   homeResolvedOnce();
   spawnPathsSubstitute();
   setupCarriesHome();
+  setupFollowsEveryCheckout();
 } catch (err) {
   console.log(`uniformity scan crashed: ${err && err.stack ? err.stack : String(err)}`);
   process.exit(1);
