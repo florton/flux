@@ -141,6 +141,16 @@ A stronger optional form, for when the extractor itself is the risky part:
 judgment — against a fabricated instrument output. More general, more verbose;
 the measure-and-value form is the cheap default.
 
+**What neither form proves, and should be said out loud:** that the instrument
+*exercised* anything. A rule can discriminate perfectly and an extractor can
+read a real number out of a run that set nothing up. Building v0.8's own
+end-to-end subject produced a live example — the `home-flag-reaches-every-command`
+scenario passed while comparing nothing at all, because the row it needed had
+not been armed and `--home` resolves identically on an empty corpus either way.
+It was fixed by asserting the precondition, which is a thing a human noticed
+and no mechanism would have. Item 3 covers the shapes of this that *are*
+mechanically detectable; this residue is not one of them.
+
 **1b. Name the second category.** The corpus is memory of *counterexamples*: a
 row says "this exact input once broke, and never again". A standing invariant
 is not a counterexample and should not be forced to impersonate one. The tool
@@ -209,7 +219,51 @@ continue to be skipped over rather than treated as either side of a boundary.
 galaxy-structure` on particles names `9f53b4d` as a fix with no hand-probing,
 and a synthetic range containing a break and a later fix reports both.
 
-### 3. The measure vocabulary, with the gaps now named by name
+### 3. "Green over nothing" has two more shapes, and both are detectable
+
+`verify` already says when most of the gate reported `na` — *"most of this gate
+is not checking anything here"* — because a gate that is green while checking
+nothing is the quietest way for this tool to become theatre. Two more shapes of
+exactly that turned up this session, and both are cheaper to detect than the
+one already handled.
+
+**3a. Zero rows is green and silent.** `ratchet verify` on an empty corpus
+prints `0/0 rows pass` and exits 0; `guard` passes. That is right for a
+freshly initialized home and wrong for a repository that declares subjects and
+has armed none of them — which, after item 1, is the state every project will
+pass through. It is not hypothetical: the v0.7 note recorded that `verify` and
+the other twenty-one commands resolved `--home` identically when checked by
+hand, and they *did*, because that check ran against an empty corpus where
+both routes answer `0/0 rows pass`. With one row they disagree, and the
+disagreement reddened every row in the corpus. A defect was written down as
+"not a defect, the shape of one" because the gate was green over nothing.
+
+**3b. An instrument that lives inside the tree it measures.** A check
+configured as `node tools/check.js` runs the *checked-out commit's* copy of
+that script — or, if the file is untracked, does not run at all in a worktree.
+Both are silent at HEAD and wrong under `replay`, `adopt`, `bisect` and
+`validate`, which is to say wrong exactly where the readings are supposed to be
+comparable by construction.
+
+This is not a hypothetical either: it is what the particles experiment did.
+Its config pointed at `tools/ratchet-check.cjs`, which is untracked, while the
+write-up listed *"Frozen instrument. The check script is pinned across every
+commit"* as one of three guards on instrument integrity. It was true of odds
+and false of particles, and nothing said so, because in v0 history commands
+checked commits out in place and the distinction could not bite. v0.4 moved
+history into worktrees and made it bite.
+
+The tool has everything it needs to catch this: it knows the project root, it
+knows the check command, and it knows whether the command reached its
+instrument through `{home}` or `{ratchet}`. A check whose executable resolves
+inside the measured tree and does not go through a token should say so — in
+`fsck` and in `guard`, as a warning naming the subject and the one-line fix.
+
+*Acceptance.* `guard` warns on a subject configured as `node tools/check.js`
+and does not warn on `node {home}/tools/check.js`; `verify` and `guard` say
+when a repository declares subjects and has no armed rows at all.
+
+### 4. The measure vocabulary, with the gaps now named by name
 
 Carried from v3 item 2, and no longer hypothetical — the odds re-run produced
 two concrete failures to express, in the *only* subject of the four that did
@@ -241,7 +295,7 @@ Still outstanding from v3, unchanged and still real:
 percent:` readings and `change is above keep`, with no dependence on the
 iteration count.
 
-### 4. `na` is still doing two jobs
+### 5. `na` is still doing two jobs
 
 Unchanged from v3 item 3. `applies when <path> exists` covers "this feature did
 not exist yet"; it does not cover "the instrument cannot run here", which
@@ -254,7 +308,7 @@ instrument that could not compile, `report` for a real measurement — because
 the vocabulary offers only the first. Every scripted instrument re-invents
 that distinction; it belongs in the tool.
 
-### 5. The catch rate still undercounts
+### 6. The catch rate still undercounts
 
 Unchanged from v3 item 4, and now with an extra reason to care: `ratchet
 report` on this repository reads `all-time: 0 caught, 8 new (0%)`, and will
@@ -265,10 +319,10 @@ journaled and never reaches the numerator.
 
 The fix is a decision, not a mechanism: journal active-row failures as catches
 and accept the journal noise, or add a second counter. Decide, then do it. It
-is item 5 rather than item 1 because it is a reporting honesty gap rather than
+is item 6 rather than item 1 because it is a reporting honesty gap rather than
 a functional one, but it is the number a reader looks at first.
 
-### 6. Mode 2, mine
+### 7. Mode 2, mine
 
 Unchanged from v3 item 5. `ratchet history` walking test-file history to
 resurrect deleted and weakened assertions as corpus rows — the one remaining
@@ -280,7 +334,7 @@ Note the interaction with item 1: a repository with no bug history is exactly
 where the capture gate bites hardest today, and mode 2 and declared rejections
 are the two independent answers to it.
 
-### 7. The agent attach
+### 8. The agent attach
 
 Unchanged from v3 item 6. **Proposal**: a documented shape for an agent
 emitting candidate `heuristic` blocks, which then go through the same gate as
@@ -290,11 +344,23 @@ exactly the vacuous kind. **Dispatch**: on a red row, hand the agent the
 witness, the input, the bisected commit and the journal entry. Neither
 requires the ratchet to call a model.
 
-### 8. Design debt
+### 9. Design debt
 
 Numeric witnesses on *scripted* rows, mode 3 semantic history, sampled
 behavioral diffs beyond visual pins, per-commit artifact caching for replay.
-Unchanged.
+Unchanged, but the last one now has numbers on it: arming one subject took
+**3m44s over 9 commits** on odds and **2m18s over 6** on particles, and almost
+all of it is setup and build repeated per commit — `physics-sanity` alone is
+48 s a probe, of which the measurement is a fraction. Caching a commit's build
+across the probes that need it is the difference between a replay someone runs
+and one they mean to.
+
+Adjacent, and the same shape as "bundle the probe" was in v3: **every project
+hand-rolls its worktree setup.** This repository has `.ratchet/tools/build.js`;
+particles needed `.ratchet/tools/prepare.cjs`; both do the same two things —
+supply `node_modules` without hitting the network once per commit, then build.
+Neither is interesting, both are load-bearing, and a project cannot replay
+anything until it has written one.
 
 ## What the two re-runs said about the prose form
 
@@ -329,10 +395,16 @@ dependencies are simply there.
   field subjects. Until that is fixed, the honest description of the tool is
   "regression memory for bugs you have already had", not "a gate".
 - **`replay` and `bisect` only find regressions**, not fixes (item 2).
-- **The catch rate undercounts** (item 5); `report` reads 0% and will continue
+- **The catch rate undercounts** (item 6); `report` reads 0% and will continue
   to.
+- **A green gate can still be checking nothing** (item 3): zero armed rows
+  passes silently, and an instrument living inside the measured tree is
+  correct at HEAD and wrong across history.
 - **The self-host corpus covers four classes, not five.** Packaging and
-  hygiene — R16, R19, R21 — still have no rows.
+  hygiene — R16, R19, R21 — still have no rows, and unlike the three classes
+  v0.8 covered, this one has no obvious instrument: "the published package
+  contains what it should" is checkable, but only against a `npm pack` whose
+  output nothing currently reads.
 - `seed` seeds `Math.random` in Node processes only. A `crypto`- or
   clock-driven instrument, or a non-Node one, is not made deterministic.
 - A pre-commit hook is advisory; CI is the authoritative gate.

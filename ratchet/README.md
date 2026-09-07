@@ -1018,4 +1018,4 @@ From the design in [../RATCHET.md](../RATCHET.md), still absent:
 The v0.6 plan — heuristics as data, validation as a capture gate, `ratchet
 adopt`, yield reporting, and the merge-landscape glue — is
 [../NEXT_STEPS_V2.md](../NEXT_STEPS_V2.md); all five are built in v0.7. What
-comes after is [../NEXT_STEPS_V3.md](../NEXT_STEPS_V3.md).
+comes after is [../NEXT_STEPS_V4.md](../NEXT_STEPS_V4.md).

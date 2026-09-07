@@ -189,8 +189,8 @@ standing invariants, listed `UNVALIDATED` by `ratchet yield`, enforcing
 nothing until something proves they can fail.
 
 **What the vocabulary still cannot say.** `monty-hall` is the one subject that
-did not translate cleanly, and it is direct evidence for item 2 of
-[NEXT_STEPS_V3.md](NEXT_STEPS_V3.md):
+did not translate cleanly, and it is direct evidence for item 4 of
+[NEXT_STEPS_V4.md](NEXT_STEPS_V4.md):
 
 - The natural reading is the *second* `Win percent:` in the output of
   `deal.js`. An extractor anchored to a label takes the first match, and there
@@ -516,7 +516,7 @@ that exercises them end to end.
 |---|---|
 | Bundle the probe check kind + seeded-RNG preload (config-only checks for the 80% case) | v0.7 — and the odds re-run needed **no project JavaScript at all**, not merely less |
 | `ratchet replay <range>` as a first-class command (was hand-rolled bash) | v0.4, joined in v0.7 by `ratchet adopt`, which is the whole replay-find-capture-validate loop in one command |
-| A third check outcome: `na`, distinct from pass | v0.4. Still doing two jobs — "did not apply here" and "could not run here" — which is item 3 of NEXT_STEPS_V3 |
+| A third check outcome: `na`, distinct from pass | v0.4. Still doing two jobs — "did not apply here" and "could not run here" — which is item 5 of NEXT_STEPS_V4 |
 | Corpus rows carry the measured witness, not just the reason | v0.4 for scripted rows; v0.7 for prose rows, where the witness is the measured number in the words of the rule that rejected it |
 | History commands operate in a worktree, never the user's checkout | v0.4 |
 | Subject-validation protocol: prove each subject fails on one known past bug | v0.7, and promoted from convention to a **capture gate**. In the re-run it refused two of the four subjects — the first time the protocol has changed an experiment's verdict |

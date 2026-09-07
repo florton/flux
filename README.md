@@ -19,8 +19,11 @@ wherever the specification is knowable, and bound it where it cannot move.
   [walkthrough](ratchet/demo/README.md).
 - **[EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)** - Four field experiments
   (margin, odds, newportfolio, particles) and the five questions they answer
-- **[NEXT_STEPS_V3.md](NEXT_STEPS_V3.md)** - **Current plan.** What v0.7 closed
-  and what comes next
+- **[NEXT_STEPS_V4.md](NEXT_STEPS_V4.md)** - **Current plan.** What v0.8 closed,
+  what re-running the field experiments against it found, and what is next.
+- **[NEXT_STEPS_V3.md](NEXT_STEPS_V3.md)** - the v0.7-era record: what v0.7
+  closed, and the measurement showing the self-host corpus covered one class of
+  defect while the codebase produced four. Superseded as the plan
 - **[NEXT_STEPS.md](NEXT_STEPS.md)** / **[NEXT_STEPS_V2.md](NEXT_STEPS_V2.md)** -
   What the experiments demanded of the design, and the v0.6 plan; both
   superseded, both kept as the record
