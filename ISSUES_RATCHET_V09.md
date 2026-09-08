@@ -7,10 +7,15 @@ continue the series in [ISSUES_RATCHET.md](ISSUES_RATCHET.md), whose `R1..R21`
 are all closed.
 
 **All defects here are now closed** — fixed later the same day, with R26 and
-R27 added because fixing R25 walked through the clause they live in. The suite
-is at 203 tests and `ratchet guard` is green on this repository. What remains
-open in this file is the part that was never a defect: the accepted trade-offs
-K1–K5, the unreproduced observation O1, and the plan work that is not built.
+R27 added because fixing R25 walked through the clause they live in.
+
+**Superseded in part, the same day.** Work that continued after this file was
+written closed **K5** (see R29) and reproduced **O1**, which had been filed as
+observed-but-unexplained (see R28 — it was a wall-clock assertion in the suite,
+not anything in the tool). Both are marked in place below. Everything found
+after this file, open and closed, is in
+[OUTSTANDING_RATCHET.md](OUTSTANDING_RATCHET.md), which is the current answer to
+"what is outstanding"; this file is the record of the v0.9 review itself.
 
 **Method, unchanged.** Every defect below was reproduced by execution against a
 scratch project, and each entry keeps the transcript that produced it. Nothing
@@ -270,7 +275,9 @@ $ ratchet fsck            # all three now reported; `quoted` correctly is not
 
 Checked against this repository, which gains no new warnings from the change.
 
-**One narrowing left in place, deliberately.** In shell mode a segment whose
+**One narrowing left in place, deliberately** — and closed later the same day
+as [R30](OUTSTANDING_RATCHET.md), once it was clear the skip could be made
+exactly as wide as its reason without reading any more shell. In shell mode a segment whose
 program is `sh`, `bash` or `zsh` is skipped, because what follows `sh -c` is a
 script body rather than a path. That predates the split and now applies per
 segment, so `cd . && bash tools/setup.sh` is still silent while
@@ -464,16 +471,33 @@ asserting the precondition — a thing a human noticed and no mechanism would
 have. This is the residue after R22 is fixed and after item 3's two shapes are
 detected, and it is not mechanically detectable.
 
-**K5 — `visual-diff-is-sound` has no proof and cannot get a cheap one.** It is a
-scripted subject, so `rejects` is unavailable to it, and it has never failed in
-this repository's history, so `adopt` has nothing to arm it with. It is the one
+**K5 — `visual-diff-is-sound` has no proof and cannot get a cheap one.**
+**Closed the same day — see [R29](OUTSTANDING_RATCHET.md).** It is a scripted
+subject, so `rejects` is unavailable to it, and it has never failed in this
+repository's history, so `adopt` has nothing to arm it with. It is the one
 subject `ratchet guard` still warns about here. Either it gets a history proof
 from a commit where the diff was wrong, or the declared-rejection idea needs a
 form that scripted subjects can express.
 
+The diagnosis was right and understated the problem: the subject had no rows
+either, and a scripted subject with no rows is never run at all, so the
+comparator was ungated rather than merely unproven. It is now a prose heuristic
+that keeps the same script as its instrument, which is the third option this
+entry did not consider. The general question — whether a *scripted* subject
+should be able to declare a rejection — is still open, as R31.
+
 ---
 
-## O1 — observed once, not reproduced
+## O1 — observed once, not reproduced — **reproduced later the same day, see [R28](OUTSTANDING_RATCHET.md)**
+
+> The cause was a test, not the tool: `replay --jobs probes commits on parallel
+> worktrees` asserted that a parallel replay beat a serial one by 40%, which is
+> a measurement of the machine. Node runs test files in parallel, so under
+> whole-suite load the ratio drifted and the suite went red about one run in
+> three — which is why nine deliberate retries all came back green and no cause
+> was found. The prediction below that "the witness will now say which test
+> failed" turned out to be half right, and the other half is R32. Everything
+> after this line is as it was written.
 
 `ratchet pr-comment` reported the `test-suite` standing invariant broken,
 minutes after `ratchet guard` had reported it green, with no edit in between:

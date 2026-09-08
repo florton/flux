@@ -10,6 +10,7 @@ import { ruleHash, collectOwned } from "../src/rule";
 import { runCheck } from "../src/runner";
 import { capture } from "../src/capture";
 import { proveSubjects } from "./proof";
+import { recorderBody, maxOverlap, probes } from "./concurrency";
 import { verify } from "../src/verify";
 import { accept, reaffirm } from "../src/accept";
 import { replay, sample, parsePolicy, formatReplay } from "../src/replay";
@@ -41,7 +42,13 @@ async function withHome<T>(home: string, fn: () => T | Promise<T>): Promise<T> {
  * A repository whose history contains one real bug: `double(n)` returns
  * `n + 2` instead of `n * 2` for a stretch of commits, then is fixed.
  */
-function seedHistory(commits = 9, breakAt = 3, fixAt = 7, delayMs?: number): { dir: string; base: string; log: CommitInfo[] } {
+function seedHistory(
+  commits = 9,
+  breakAt = 3,
+  fixAt = 7,
+  delayMs?: number,
+  probeLog?: string
+): { dir: string; base: string; log: CommitInfo[] } {
   const dir = tmpDir();
   const g = (...args: string[]) =>
     spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args],
@@ -54,7 +61,11 @@ function seedHistory(commits = 9, breakAt = 3, fixAt = 7, delayMs?: number): { d
     [
       'const v = JSON.parse(require("fs").readFileSync(0, "utf8"));',
       'const { double } = require("./lib.js");',
-      delayMs ? `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${delayMs});` : "",
+      probeLog
+        ? recorderBody(probeLog, delayMs ?? 0)
+        : delayMs
+          ? `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${delayMs});`
+          : "",
       "const got = double(v);",
       "if (got === v * 2) process.exit(0);",
       'console.log("double(" + v + ") gave " + got + ", expected " + v * 2);',
@@ -343,11 +354,18 @@ test("replay reports a commit it cannot prepare as na-env, not as a bug", async 
 });
 
 test("replay --jobs probes commits on parallel worktrees, results in order", async () => {
-  // Each probe sleeps ~400ms, so 8 serial probes take >3s while 4 parallel
-  // workers finish in roughly a quarter of it. The check runs inside the
-  // worktree, so this also proves each session checks out its own commit
-  // without clobbering the others.
-  const { dir, base, log } = seedHistory(8, 99, 99, 400); // never broken, slow checks
+  // Each probe records the window it occupied and the directory it ran in.
+  // Four sessions over eight commits must show four distinct worktrees --
+  // the fan-out, which is a fact about the run and not about its speed -- and
+  // windows that intersect, which only two probes running at once can produce.
+  //
+  // This used to time a serial run against a parallel one and assert the
+  // parallel one came in under 60% of it. That is a measurement of the
+  // machine: the suite runs its files in parallel, so the four workers
+  // competed with the rest of the suite, and the assertion failed on an
+  // untouched tree about one run in three. See test/concurrency.ts.
+  const probeLog = tmpDir();
+  const { dir, base, log } = seedHistory(8, 99, 99, 400, probeLog); // never broken, slow checks
   appendEvent(path.join(dir, ".ratchet", "corpus.jsonl"), {
     op: "capture",
     id: rowId("doubling", 21),
@@ -358,13 +376,7 @@ test("replay --jobs probes commits on parallel worktrees, results in order", asy
   });
   const home = path.join(dir, ".ratchet");
 
-  const serialStart = Date.now();
-  await replay(dir, { good: base, bad: "HEAD", ratchetHome: home, concurrency: 1 });
-  const serialMs = Date.now() - serialStart;
-
-  const parStart = Date.now();
   const r = await replay(dir, { good: base, bad: "HEAD", ratchetHome: home, concurrency: 4 });
-  const parMs = Date.now() - parStart;
 
   assert.equal(r.samples.length, log.length);
   assert.ok(r.samples.every((s) => s.status === "pass"));
@@ -373,8 +385,16 @@ test("replay --jobs probes commits on parallel worktrees, results in order", asy
     log.map((c) => c.sha),
     "parallel probing must preserve commit order in the report"
   );
-  assert.ok(serialMs > 2400, `serial run should take ~8 x 400ms, took ${serialMs}ms`);
-  assert.ok(parMs < serialMs * 0.6, `parallel ${parMs}ms is not much faster than serial ${serialMs}ms`);
+
+  const ran = probes(probeLog);
+  assert.equal(ran.length, log.length, "every commit must have been probed exactly once");
+  assert.equal(
+    new Set(ran.map((p) => p.cwd)).size,
+    4,
+    "--jobs 4 must spread the probes over four distinct worktrees, one checkout each"
+  );
+  const overlap = maxOverlap(probeLog);
+  assert.ok(overlap >= 2, `probes never ran at the same time (most in flight at once: ${overlap})`);
 
   // No worktrees are left behind, same as the serial path.
   assert.equal(

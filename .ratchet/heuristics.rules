@@ -1,8 +1,10 @@
 # The ratchet's own prose heuristics.
 #
-# The six subjects in config.json are checks of the checker: each reproduces a
+# The five subjects in config.json are checks of the checker: each reproduces a
 # defect this repository actually shipped, and each needs arbitrary computation
-# (scratch corpora, merge simulation, PNG round-trips), so they stay scripts.
+# (scratch corpora, merge simulation), so they stay scripts. A sixth, the PNG
+# round-trip, is at the bottom of this file: it needed the same computation but
+# had no defect to reproduce, and so needed rules that could state a refusal.
 #
 # This one is the other half of the argument -- a standing invariant that needs
 # no plumbing at all, and so is written as data instead of as code. If the prose
@@ -17,10 +19,10 @@ heuristic test-suite
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   rule     failing is 0
-  rule     passing is at least 203
+  rule     passing is at least 206
   rule     status is one of 0, 1
   rejects  failing 1
-  rejects  passing 202
+  rejects  passing 205
   rejects  status 7
   note     the exit code is measured so that a red suite is judged by its own
   note     counts -- "failing measured 1" -- instead of short-circuiting as a
@@ -30,7 +32,7 @@ heuristic test-suite
 
 # The three below cover the class of defect the corpus was missing.
 #
-# Classifying the twenty-one v0 review defects against the six scripted
+# Classifying the twenty-one v0 review defects against the scripted
 # subjects showed every one of those subjects was a check of a data structure:
 # five of twenty-one defects, all in one row of the table. The other sixteen
 # sat at the process boundary, on the CLI surface, in the capture-path routing
@@ -94,3 +96,34 @@ heuristic source-uniformity
   because  of its call sites -- has shipped four times in three versions, and a
   because  corpus row cannot catch it: a row is one counterexample and this is
   because  a completeness property over a set of call sites
+
+# This one was a scripted subject and was doing nothing at all.
+#
+# It could not be armed -- ratchet/src/visual.ts has exactly one commit in this
+# repository and was correct in it, so `adopt` had no failure to arm a row
+# with -- and a scripted subject with no row is never run by anything. It sat
+# in config.json looking like coverage while the visual diff went ungated, and
+# the only sign was the validation warning, which reads as paperwork.
+#
+# The instrument did not need to change: selfcheck.js still does the PNG
+# round-trip, still runs out of {home}, and is still owned here so that editing
+# it re-opens the proof. Only the judgment moved out of the script and into
+# rules that can state what they refuse -- which is the whole point of the
+# prose form, and the same shape `test-suite` above already has.
+
+heuristic visual-diff-is-sound
+  run      node {home}/tools/selfcheck.js visual-diff-is-sound
+  owns     .ratchet/tools/selfcheck.js
+  applies  when ratchet/dist/src/visual.js exists
+  measure  status  exit code
+  measure  verified  count of lines matching "verified on"
+  rule     status is 0
+  rule     verified is 1
+  rejects  status 1
+  rejects  verified 0
+  note     `verified 0` is the reading that matters: a check can exit 0 without
+  note     having asserted anything, and then the green means only that the
+  note     process ran. The line is printed last, after every assertion.
+  because  a baseline pin is worth exactly what the comparator is worth -- a
+  because  diff with a false negative pins nothing, and reports success while
+  because  it does it

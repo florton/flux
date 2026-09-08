@@ -292,8 +292,8 @@ $ ratchet guard
   ✗ c74c11d9f basic-edge — edge measured -0.0564, rule says "edge is between -0.03 and 0.015"
   run `ratchet verify` for the full witness, or `ratchet show <id>` for one row's history
 ✓ standing             1/1 standing invariants hold
-! validation           1 subject(s) have no proof they can fail: visual-diff-is-sound
-    prove one against history:   ratchet validate visual-diff-is-sound --known-bad <sha> --known-good HEAD
+! validation           1 subject(s) have no proof they can fail: screenshot-pins
+    prove one against history:   ratchet validate screenshot-pins --known-bad <sha> --known-good HEAD
     or without it, in the rules: rejects <measure> <a value the rules must refuse>
     8 validated against history: cli-end-to-end, cli-errors-are-messages, ...
     1 validated against a declared counterexample: test-suite
@@ -425,7 +425,7 @@ never prints a bare "validated" again:
 $ ratchet yield
   cli-end-to-end   1 row  (1 active)  evidence today   [prose, validated against history]
   test-suite       0 rows (0 active)  no evidence yet  [prose, validated against a declared counterexample, standing]
-  visual-diff-is-sound  0 rows (0 active)  no evidence yet  [script, UNVALIDATED]
+  screenshot-pins  0 rows (0 active)  no evidence yet  [script, UNVALIDATED]
 ```
 
 Neither does a declared rejection move the rule hash. It changes nothing about
@@ -825,11 +825,12 @@ was silent on exactly the shape this check exists to name (R24). Grouping
 (`(...)`, `$(...)`), redirection and a trailing `&` are not modelled: this
 reads far enough to find program names, not far enough to be a shell.
 
-One narrowing predates the split and survives it: in shell mode a segment whose
-program is `sh`, `bash` or `zsh` is skipped, because what follows `sh -c` is a
-script *body*, not a path. The cost is that `bash tools/setup.sh` is not
-reported while `./tools/setup.sh` is. Run the script directly, or reach it
-through `{home}`, if you want it checked.
+One narrowing remains, and it is now only as wide as its reason: a segment is
+skipped when its program is `sh`, `bash` or `zsh` **and it carries a `-c` flag**,
+because what follows `sh -c` is a script *body*, not a path. Every other way of
+invoking a shell names a file like anything else, so `bash tools/setup.sh` is
+reported exactly as `./tools/setup.sh` is. Through v0.9 the skip applied to any
+segment run by a shell, which hid that shape entirely.
 
 ## Capture sources
 
@@ -1086,7 +1087,7 @@ still retires the row.
 
 The ratchet runs under itself, in both forms.
 
-**Six scripted subjects**, each a check of the checker, each invoked through
+**Five scripted subjects**, each a check of the checker, each invoked through
 `{home}` so it is carried across history rather than read from the tree it
 measures. These stay scripts on purpose: simulating a branch merge or a PNG
 codec round-trip is not a sentence, and pretending otherwise would be the
@@ -1099,10 +1100,17 @@ contortion the prose form exists to avoid.
 | `reduction-preserves-cause` | a stored row reproduces the bug that was captured | R5 |
 | `recurrence-is-visible` | an accepted row's return is surfaced, not deduplicated | R2 |
 | `stringify-injective` | distinct values never share a dedup key | R20 |
-| `visual-diff-is-sound` | codec round-trip, 1-px diff at the right place, deterministic render | — |
 
-The sixth subject has no historical bug — the visual diff is new in v0.5 —
-so its validation comes from the codec cross-checks in the test suite instead.
+A sixth, `visual-diff-is-sound`, was a scripted subject and is now a prose
+heuristic. It could not be armed — the visual diff is new in v0.5 and has never
+been wrong here, so `adopt` had no failure to arm a row with — and **a scripted
+subject with no row is never run by anything**. It sat in `config.json` looking
+like coverage while the comparator went ungated. The script is unchanged and
+still does the PNG round-trip; only the judgment moved into rules that can say
+what they refuse, which is a proof a subject can earn without a bug ever having
+happened. That is the shape to reach for when a check is a standing property
+rather than a counterexample: keep the script as the instrument, and put the
+verdict in prose.
 
 All five are validated against `4abc1d5`, the last v0 commit, where those bugs
 actually lived. Replayed across this repository's own history:

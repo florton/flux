@@ -8,6 +8,7 @@ import { readJournal } from "../src/journal";
 import { pool } from "../src/runner";
 import { capture } from "../src/capture";
 import { proveSubjects } from "./proof";
+import { recorderBody, maxOverlap, probes } from "./concurrency";
 import { verify, countOutcomes } from "../src/verify";
 import { accept, reopen } from "../src/accept";
 import { fsck } from "../src/fsck";
@@ -253,7 +254,13 @@ test("R20: values outside the JSON domain get distinct keys", () => {
 // ------------------------------------------- R9: concurrency and ordering
 
 test("R9: verify runs rows concurrently", async () => {
-  const { home, root } = project({ s: { check: QUOTED_NODE + " check.js" } }, "");
+  // Each row's check records the window it occupied. Two windows that
+  // intersect can only have come from two checks in flight at once, which is
+  // the property; comparing a parallel run's clock against a serial one's
+  // measured the machine instead, and this suite runs its files in parallel.
+  // See test/concurrency.ts.
+  const probeLog = tmpDir();
+  const { home, root } = project({ s: { check: QUOTED_NODE + " check.js" } }, recorderBody(probeLog, 200));
   for (let i = 0; i < 8; i++) {
     appendEvent(path.join(home, "corpus.jsonl"), {
       op: "capture", id: rowId("s", i), at: "2026-01-01T00:00:0" + i + "Z",
@@ -261,17 +268,13 @@ test("R9: verify runs rows concurrently", async () => {
     });
   }
 
-  const t0 = Date.now();
-  await verify(root, { quiet: true, ratchetHome: home, concurrency: 1 });
-  const serialMs = Date.now() - t0;
-
-  const t1 = Date.now();
   const results = await verify(root, { quiet: true, ratchetHome: home, concurrency: 8 });
-  const parallelMs = Date.now() - t1;
 
   assert.equal(results.length, 8);
   assert.ok(results.every((r) => r.pass));
-  assert.ok(parallelMs < serialMs, `parallel (${parallelMs}ms) must beat serial (${serialMs}ms)`);
+  assert.equal(probes(probeLog).length, 8, "every row must have been checked exactly once");
+  const overlap = maxOverlap(probeLog);
+  assert.ok(overlap >= 2, `rows were checked one at a time (most in flight at once: ${overlap})`);
 });
 
 test("R9: pool preserves input order regardless of completion order", async () => {
@@ -280,4 +283,46 @@ test("R9: pool preserves input order regardless of completion order", async () =
     return ms;
   });
   assert.deepEqual(out, [30, 5, 20, 1]);
+});
+
+test("R9: pool holds exactly `limit` in flight, and starts one more as each finishes", async () => {
+  // The pool is a promise scheduler, so nothing here needs a clock: every task
+  // is released by hand and the saturation is read off directly. The processes
+  // it ends up running are what the two overlap tests cover.
+  const items = [0, 1, 2, 3, 4, 5, 6, 7];
+  const release: (() => void)[] = [];
+  const started: number[] = [];
+  let live = 0;
+  let most = 0;
+
+  const done = pool(items, 3, async (i) => {
+    started.push(i);
+    live++;
+    most = Math.max(most, live);
+    await new Promise<void>((r) => release.push(r));
+    live--;
+    return i * 2;
+  });
+  const settle = async () => {
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+  };
+
+  await settle();
+  assert.equal(live, 3, "the pool must fill to the limit at once, not one at a time");
+  assert.deepEqual(started, [0, 1, 2], "and take its items in order");
+
+  release.shift()!();
+  await settle();
+  assert.equal(live, 3, "a finished task must be replaced immediately");
+  assert.deepEqual(started, [0, 1, 2, 3], "by the next item, in order");
+
+  while (release.length > 0) {
+    release.shift()!();
+    await settle();
+  }
+
+  assert.deepEqual(await done, items.map((i) => i * 2), "results land at their input index");
+  assert.equal(most, 3, "the limit is a ceiling, never exceeded");
+  assert.deepEqual(started, items, "every item runs exactly once");
 });

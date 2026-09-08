@@ -48,9 +48,16 @@
 > critical one predated this work: a `#` preceded by whitespace inside a quoted
 > clause value was stripped as a comment, which truncated the rule silently and
 > could green a gate over a property the file plainly forbids — and `fmt` then
-> wrote the truncation back to disk. What remains open in that file is the part
-> that was never a defect: the accepted trade-offs, the unreproduced
-> observation O1, and the plan work below that is not built.
+> wrote the truncation back to disk.
+>
+> **What is outstanding now is in
+> [OUTSTANDING_RATCHET.md](OUTSTANDING_RATCHET.md)** (R28–R33). Three more
+> defects were found and fixed after that review, including the one that had
+> been filed as the unreproduced observation O1: the suite carried two
+> wall-clock concurrency assertions, so the gate failed about one run in three
+> on an untouched tree. Three remain open, one of them a false green — a
+> scripted subject with no rows is never run, and the gate affirms it by name.
+> K5 is closed. The plan work below is still not built.
 >
 > **And one new uniformity invariant**, `proof-tiers-reach-every-report`, for a
 > bug this session shipped and then caught: `ratchet yield` reported a

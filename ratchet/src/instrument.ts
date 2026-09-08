@@ -55,6 +55,9 @@ const INTERPRETERS = new Set([
   "sh", "bash", "zsh", "pwsh", "powershell",
 ]);
 
+/** The subset whose `-c` form takes a script body where a path would go. */
+const SHELL_INTERPRETERS = new Set(["sh", "bash", "zsh"]);
+
 /**
  * The parts of a shell command that each begin a new program.
  *
@@ -128,9 +131,14 @@ function instrumentInSegment(command: string, shell: boolean): string | undefine
     // A bare name resolves on PATH, which is outside the tree by definition.
     return /[\\/]/.test(argv[0]) ? argv[0] : undefined;
   }
-  // `sh -c "..."` puts a script *body* here, not a path; it will not resolve
-  // to a file and so produces no finding either way.
-  if (shell && (exe === "sh" || exe === "bash" || exe === "zsh")) return undefined;
+  // `sh -c "..."` puts a script *body* in the next token, not a path, and it
+  // will not resolve to a file either way. That is a reason to skip the `-c`
+  // form, and it was being read as a reason to skip every invocation of a
+  // shell -- so `bash tools/setup.sh`, which names a file in the measured tree
+  // as plainly as `./tools/setup.sh` does, produced no finding.
+  if (shell && SHELL_INTERPRETERS.has(exe) && argv.slice(1).some((a) => /^-[a-z]*c$/i.test(a))) {
+    return undefined;
+  }
   for (let i = 1; i < argv.length; i++) {
     if (!argv[i].startsWith("-")) return argv[i];
   }

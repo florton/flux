@@ -431,6 +431,20 @@ test("a shell-mode check names its instrument in any command, not only the first
   assert.deepEqual(instrumentPaths("cd . && node tools/check.js", false), []);
 });
 
+test("only the `-c` form of a shell hides a path, not every invocation of one", () => {
+  // `sh -c "..."` takes a script body where a path would go, so there is
+  // nothing in the tree to name. That was being read as a reason to skip
+  // every command whose program is a shell, which hid the plainest shape
+  // there is: `bash tools/setup.sh` names a file in the measured tree.
+  assert.deepEqual(instrumentPaths('sh -c "node tools/check.js"', true), []);
+  assert.deepEqual(instrumentPaths('bash -c "node tools/check.js"', true), []);
+  assert.deepEqual(instrumentPaths('bash -lc "node tools/check.js"', true), [], "combined flags too");
+
+  assert.deepEqual(instrumentPaths("bash tools/setup.sh", true), ["tools/setup.sh"]);
+  assert.deepEqual(instrumentPaths("cd . && bash tools/setup.sh", true), ["tools/setup.sh"]);
+  assert.deepEqual(instrumentPaths("bash --norc tools/setup.sh", true), ["tools/setup.sh"]);
+});
+
 test("a chained shell check is reported as a frozen instrument", async () => {
   // The end of the same defect: the warning, not just the path list.
   const p = project();
