@@ -3,11 +3,11 @@
 > Supersedes [NEXT_STEPS_V3.md](NEXT_STEPS_V3.md) as the plan. That file
 > remains the v0.7-era record and the place the coverage finding is written
 > down; its item 1 is built and is v0.8. This file is the v0.9 plan. What
-> exists is in [ratchet/README.md](ratchet/README.md).
+> exists is in [../../ratchet/README.md](../../ratchet/README.md).
 
 > **Status, 2026-09-07 — items 1, 2, 3, 4 and 5 are built; this is v0.9.**
 > 8,328 lines of `src`, 193 tests. What exists is in
-> [ratchet/README.md](ratchet/README.md). The five closed items are marked
+> [../../ratchet/README.md](../../ratchet/README.md). The five closed items are marked
 > **BUILT** in place below, with what was actually implemented; items 6–9 and
 > the residue of item 4 are the remaining plan.
 >

@@ -400,7 +400,7 @@ out of a run that set nothing up.
 
 ## Plan work simply not built
 
-Tracked in [NEXT_STEPS_V4.md](NEXT_STEPS_V4.md), listed so this file is a
+Tracked in [NEXT_STEPS_V5.md](NEXT_STEPS_V5.md), listed so this file is a
 complete answer to "what is outstanding":
 
 - **Item 6, the rest of the catch rate.** `report` reads 0% and will keep

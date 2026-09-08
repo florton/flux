@@ -1,11 +1,11 @@
 # Ratchet — Regression Memory for AI-Assisted Development
 
 > **Status:** design sketch. Extracted from
-> [DESIGN_V3.md](DESIGN_V3.md) (see issue D in [ISSUES.md](ISSUES.md)). The
+> [../flux/DESIGN_V3.md](../flux/DESIGN_V3.md) (see issue D in [../flux/ISSUES.md](../flux/ISSUES.md)). The
 > ratchet is the part of Flux worth shipping first, and it does not depend on
 > any other part.
 >
-> **Much of this is now built** — see [ratchet/](ratchet/) (v0.6). The corpus,
+> **Much of this is now built** — see [../../ratchet/](../../ratchet/) (v0.6). The corpus,
 > the journal, the accept ceremony, owning-rule hashes with quarantine,
 > cause-preserving minimization, replay with sampling and halving (now on
 > parallel worktrees), subject validation, and the first behavior snapshot —
@@ -160,7 +160,7 @@ differ in what they observe; they share the contract that matters: **every
 heuristic yields a deterministic pass/fail verdict and a machine-readable
 counterexample that enters the corpus.** A heuristic that cannot produce a
 counterexample is a note, not a heuristic — prose nothing enforces (the `note`
-category, verbatim from DESIGN_V3.md).
+category, verbatim from ../flux/DESIGN_V3.md).
 
 | Kind | Observes | Expressed as | Example |
 |---|---|---|---|
@@ -187,7 +187,7 @@ overwhelmingly of this kind: expressible and checkable with zero model calls.
 **Custom targeting logic** is not a new language. Anything the other kinds
 cannot say is a host-language function that returns pass or a counterexample.
 The prose vocabulary is for what domain experts must be able to own; the
-function form is the general case. The rule from DESIGN_V3.md stands: prose
+function form is the general case. The rule from ../flux/DESIGN_V3.md stands: prose
 rules and executable rules are peers — neither is generated from the other,
 neither has precedence.
 
@@ -295,7 +295,7 @@ model enters the picture — which makes it the piece that de-risks everything
 else. Flux's `derive` becomes a consumer:
 
 - `flux derive` writes pins and consumes the corpus (it already does, in
-  DESIGN_V3.md — this is that machinery, generalized and extracted).
+  ../flux/DESIGN_V3.md — this is that machinery, generalized and extracted).
 - The behavioral diff on resynthesis *is* `ratchet verify`.
 - Tier 2 `infer` gains corpus-driven repair prompts and counterexample replay
   for cached determinism.
@@ -316,7 +316,7 @@ reversed.
   enforced. Better than nothing, never trusted as proof.
 - **Dual-run discrimination is not perfect.** Some flakes reproduce twice.
 - **The corpus is only as good as the rules that own it.** A vacuous rule
-  catches nothing; the tautology-detection machinery from DESIGN_V3.md
+  catches nothing; the tautology-detection machinery from ../flux/DESIGN_V3.md
   (mutant pass) is what keeps rows load-bearing. It belongs in this library,
   not in Flux.
 

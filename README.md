@@ -5,37 +5,55 @@ wherever the specification is knowable, and bound it where it cannot move.
 
 ## Files
 
-- **[DESIGN_V3.md](DESIGN_V3.md)** - **Current proposal.** TypeScript library with a
-  compile-time synthesis step
-- **[RATCHET.md](RATCHET.md)** - The ratchet extracted as a standalone library:
-  regression memory for AI-assisted development, shipped first
-- **[ratchet/](ratchet/)** - **v0.7 — built, tested, self-hosting, and
-  self-enforcing.** Working CLI: heuristics written as prose in a closed
-  vocabulary, capture with cause-preserving reduction and a validation gate,
-  `guard` wired into pre-commit and CI, `adopt` to arm a heuristic against your
-  own history, the accept ceremony, owning-rule hashes with quarantine that
-  names the clause that moved, replay across history with sampling and halving,
-  visual pins, bisect, fsck. See [ratchet/README.md](ratchet/README.md) and the
-  [walkthrough](ratchet/demo/README.md).
-- **[EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)** - Four field experiments
-  (margin, odds, newportfolio, particles) and the five questions they answer
-- **[NEXT_STEPS_V4.md](NEXT_STEPS_V4.md)** - **Current plan.** What v0.8 closed,
-  what re-running the field experiments against it found, and what is next.
-- **[NEXT_STEPS_V3.md](NEXT_STEPS_V3.md)** - the v0.7-era record: what v0.7
-  closed, and the measurement showing the self-host corpus covered one class of
-  defect while the codebase produced four. Superseded as the plan
-- **[NEXT_STEPS.md](NEXT_STEPS.md)** / **[NEXT_STEPS_V2.md](NEXT_STEPS_V2.md)** -
-  What the experiments demanded of the design, and the v0.6 plan; both
-  superseded, both kept as the record
-- **[ISSUES_RATCHET.md](ISSUES_RATCHET.md)** - The v0 code review: 21 findings, each
-  reproduced by execution, all closed
-- **[EXPERIMENT_LEETCODE.md](EXPERIMENT_LEETCODE.md)** - LeetCode ceiling experiment:
-  statement length vs. solution length, with results
-- **[ISSUES.md](ISSUES.md)** - Open issues from design review, kept current
-- **[LANGUAGE_DESIGN_V2.md](LANGUAGE_DESIGN_V2.md)** - Standalone-language form, retained
-  for reference. Same design decisions, different delivery vehicle
-- **[LANGUAGE_DESIGN.md](LANGUAGE_DESIGN.md)** - Original v1 language specification
-- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - v1 syntax reference
+All design and record documents live under [docs/](docs/), split by track.
+Superseded files are kept as the record, exactly as they were; each plan names
+its successor.
+
+### Flux the language — [docs/flux/](docs/flux/)
+
+- **[docs/flux/DESIGN_V3.md](docs/flux/DESIGN_V3.md)** - **Current proposal.**
+  TypeScript library with a compile-time synthesis step
+- **[docs/flux/EXPERIMENT_LEETCODE.md](docs/flux/EXPERIMENT_LEETCODE.md)** -
+  LeetCode ceiling experiment: statement length vs. solution length, with
+  results
+- **[docs/flux/ISSUES.md](docs/flux/ISSUES.md)** - Open issues from design
+  review, kept current
+- **[docs/flux/LANGUAGE_DESIGN_V2.md](docs/flux/LANGUAGE_DESIGN_V2.md)** -
+  Standalone-language form, retained for reference. Same design decisions,
+  different delivery vehicle
+- **[docs/flux/LANGUAGE_DESIGN.md](docs/flux/LANGUAGE_DESIGN.md)** - Original
+  v1 language specification
+- **[docs/flux/QUICK_REFERENCE.md](docs/flux/QUICK_REFERENCE.md)** - v1 syntax
+  reference
+
+### The ratchet — [docs/ratchet/](docs/ratchet/)
+
+- **[ratchet/README.md](ratchet/README.md)** - The working implementation.
+  v0.9 + the secondary verifier: CLI, walkthrough, commands
+- **[docs/ratchet/RATCHET.md](docs/ratchet/RATCHET.md)** - The ratchet
+  extracted as a standalone library: regression memory for AI-assisted
+  development, shipped first
+- **[docs/ratchet/NEXT_STEPS_V5.md](docs/ratchet/NEXT_STEPS_V5.md)** -
+  **Current plan.** The fuzzer is built; what closed, what is next
+- **[docs/ratchet/NEXT_STEPS_V4.md](docs/ratchet/NEXT_STEPS_V4.md)** - the
+  v0.9 plan and its record; superseded by V5, kept as the measurement that
+  shaped it
+- **[docs/ratchet/NEXT_STEPS_V3.md](docs/ratchet/NEXT_STEPS_V3.md)** - the
+  v0.7-era record: the coverage finding and the self-host corpus lesson
+- **[docs/ratchet/NEXT_STEPS.md](docs/ratchet/NEXT_STEPS.md)** /
+  **[docs/ratchet/NEXT_STEPS_V2.md](docs/ratchet/NEXT_STEPS_V2.md)** - the
+  v0.6 plan and what the experiments demanded of the design
+- **[docs/ratchet/OUTSTANDING_RATCHET.md](docs/ratchet/OUTSTANDING_RATCHET.md)** -
+  the live issue register: R28 onward, open and closed, one file for "what is
+  outstanding"
+- **[docs/ratchet/ISSUES_RATCHET_V09.md](docs/ratchet/ISSUES_RATCHET_V09.md)** -
+  the v0.9 code review: R22–R27, each reproduced by execution, all closed
+- **[docs/ratchet/ISSUES_RATCHET.md](docs/ratchet/ISSUES_RATCHET.md)** - the
+  v0 code review: 21 findings (R1–R21), each reproduced by execution, all
+  closed
+- **[docs/ratchet/EXPERIMENTS_RATCHET.md](docs/ratchet/EXPERIMENTS_RATCHET.md)** -
+  the field experiments (margin, odds, newportfolio, particles) and the
+  questions they answer
 
 ## The idea
 
@@ -122,7 +140,7 @@ Two tracks, at different stages.
 
 ### Flux the language — design phase
 
-See **[DESIGN_V3.md](DESIGN_V3.md)** for the current proposal. The design has moved
+See **[docs/flux/DESIGN_V3.md](docs/flux/DESIGN_V3.md)** for the current proposal. The design has moved
 through three forms:
 
 - **v1** — a standalone language with `infer` as the central runtime primitive
@@ -133,19 +151,22 @@ through three forms:
   and incremental adoption
 
 None of it is built. Everything rests on one unmeasured assumption — that writing a
-specification is genuinely less work than writing the code — and DESIGN_V3.md
+specification is genuinely less work than writing the code — and docs/flux/DESIGN_V3.md
 closes with the experiment that settles it. That experiment is still ungated:
-[EXPERIMENT_LEETCODE.md](EXPERIMENT_LEETCODE.md) measured the ceiling and found the
+[docs/flux/EXPERIMENT_LEETCODE.md](docs/flux/EXPERIMENT_LEETCODE.md) measured the ceiling and found the
 "spec is less work" pitch does not survive it, which rescopes the claim to "spec
 costs about the same, but is verifiable, durable, and outlives the implementation".
 
 ### The ratchet — built
 
 The ratchet was the part worth shipping first, and it does not depend on any other
-part of Flux ([ISSUES.md](ISSUES.md) item D). [ratchet/](ratchet/) is a
-zero-dependency TypeScript CLI at v0.7 with 153 tests, validated in four real repos
-([EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md)) and hardened by a code review
-that reproduced 21 defects by execution ([ISSUES_RATCHET.md](ISSUES_RATCHET.md)).
+part of Flux ([docs/flux/ISSUES.md](docs/flux/ISSUES.md) item D). [ratchet/](ratchet/) is a
+zero-dependency TypeScript CLI with 217 tests and a shipped adversarial fuzzer,
+validated in four real repos
+([docs/ratchet/EXPERIMENTS_RATCHET.md](docs/ratchet/EXPERIMENTS_RATCHET.md)) and hardened by code reviews
+that reproduced every defect by execution
+([docs/ratchet/ISSUES_RATCHET.md](docs/ratchet/ISSUES_RATCHET.md),
+[docs/ratchet/OUTSTANDING_RATCHET.md](docs/ratchet/OUTSTANDING_RATCHET.md)).
 
 **A heuristic is prose.** The v0.7 change: a subject is five lines in a closed
 vocabulary, not forty lines of hand-written plumbing — because that plumbing is

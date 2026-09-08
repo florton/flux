@@ -6,7 +6,7 @@
 
 > Supersedes [NEXT_STEPS.md](NEXT_STEPS.md) as the plan. That file remains
 > the v0-era record: requirements each backed by an observed failure. This
-> file is the v0.6 plan. What exists is in [ratchet/README.md](ratchet/README.md);
+> file is the v0.6 plan. What exists is in [../../ratchet/README.md](../../ratchet/README.md);
 > the workflow section there is the adopted loop.
 
 **Where v0.6 landed.** The churn number the original design promised —

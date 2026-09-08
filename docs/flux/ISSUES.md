@@ -76,20 +76,20 @@ preserving the cost-lever argument without prohibition.
   extracting corpus store + journal + lockfile + behavioral-diff + mutation
   runner as a standalone library with Flux as flagship consumer.
   **Direction settled 2026-09-05:** extraction is the plan — see
-  [RATCHET.md](RATCHET.md). Git is not extended; the ratchet hooks existing
+  [../ratchet/RATCHET.md](../ratchet/RATCHET.md). Git is not extended; the ratchet hooks existing
   pipeline points (test output, CI, pre-push, agent sessions) via plain files.
   Also settled: **tautology detection (the mutant pass over bodies vs. rules)
   moves to the ratchet library** — it governs rule quality, not synthesis.
   Flux keeps only open-decisions analysis (free-parameter enumeration), which
   is synthesis-specific. Retroactive application of the ratchet to a commit
-  tree (replay / mine / semantic history) is specified in RATCHET.md.
-  **v0 prototype built 2026-09-06:** see [ratchet/](ratchet/) — CLI with
+  tree (replay / mine / semantic history) is specified in ../ratchet/RATCHET.md.
+  **v0 prototype built 2026-09-06:** see [../../ratchet/](../../ratchet/) — CLI with
   capture (fast-check reporter + JUnit), dual-run discrimination, ddmin
   shrinking, verify, accept/reopen ceremony, churn report, and manual binary
   bisect (`git bisect run` is unreliable on Windows git). Demo with a seeded
-  git history at [ratchet/demo/](ratchet/demo/).
+  git history at [../../ratchet/demo/](../../ratchet/demo/).
   **v0 reviewed 2026-09-05:** 21 open defects and findings recorded in
-  [ISSUES_RATCHET.md](ISSUES_RATCHET.md) — two critical (shell injection via
+  [../ratchet/../ratchet/ISSUES_RATCHET.md](../ratchet/../ratchet/ISSUES_RATCHET.md) — two critical (shell injection via
   `{test}` substitution; an accepted row can never re-catch its own regression),
   five high. The design holds; the corpus-integrity seams do not.
   **v0.2 built 2026-09-06:** the seven critical/high defects are fixed with a

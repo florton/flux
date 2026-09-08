@@ -7,7 +7,7 @@
 > found something that outranks all of them — the capture gate refuses any
 > check that has never failed in the repository's history, which is five of
 > the eight real subjects those experiments use. What exists is in
-> [ratchet/README.md](ratchet/README.md).
+> [../../ratchet/README.md](../../ratchet/README.md).
 
 ## What v0.7 closed
 

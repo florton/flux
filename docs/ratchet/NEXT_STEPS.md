@@ -10,7 +10,7 @@ experiment detail lives in `EXPERIMENTS_RATCHET.md`; this file is the plan.
 Defects and findings from the v0 code review are in
 [ISSUES_RATCHET.md](ISSUES_RATCHET.md), including gaps in this document.
 
-**Built as of v0.4** (see [ratchet/README.md](ratchet/README.md)): the replay
+**Built as of v0.4** (see [../../ratchet/README.md](../../ratchet/README.md)): the replay
 sampler with halving, the `na`/`na(env)` distinction and environment recording,
 owning-rule hashes with quarantine, the subject-validation protocol as
 `ratchet validate`, history commands in worktrees, and self-hosting. What

@@ -1,8 +1,8 @@
 # Ratchet v0 — Issues, Defects, and Findings
 
-Recorded 2026-09-05 from a review of the [ratchet/](ratchet/) v0 prototype
+Recorded 2026-09-05 from a review of the [../../ratchet/](../../ratchet/) v0 prototype
 (868 lines of `src`, 177 of tests). Numbered `R1..R21` to stay distinct from the
-design issues in [ISSUES.md](ISSUES.md). Status per entry is in the table below.
+design issues in [../flux/ISSUES.md](../flux/ISSUES.md). Status per entry is in the table below.
 
 **Method.** Every module was read, the suite was run (11/11 pass), and each
 suspected defect was reproduced by execution against a scratch project. Entries
@@ -214,7 +214,7 @@ Two properties make this worse than an ordinary injection:
 
 The vector is realistic: parameterized tests named from fixture data, a
 `junit.xml` from an untrusted CI artifact, or a PR that adds a fixture whose
-name reaches the report. This is [ISSUES.md](ISSUES.md) item 5 (supply chain)
+name reaches the report. This is [../flux/ISSUES.md](../flux/ISSUES.md) item 5 (supply chain)
 arriving through a channel that item does not list.
 
 **Fix.** Run checks with `shell: false` and an argv array; pass the test name
