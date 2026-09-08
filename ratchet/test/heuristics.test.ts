@@ -20,6 +20,7 @@ import { renderComment } from "../src/pr-comment";
 import { heuristicVersions, diffCanonical } from "../src/heuristic-history";
 import { substituteArgv, substituteShell } from "../src/substitution";
 import { observe } from "../src/probe";
+import { RULES_TEMPLATE } from "../src/templates";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-h-"));
@@ -49,7 +50,14 @@ test("canonicalize: modal verbs become the copula, not nothing", () => {
 
 test("canonicalize: a negated modal keeps its negation", () => {
   // Stripping "should" out of "should never be above" would invert the rule.
-  assert.equal(canonicalizeClause("edge should never be above 0.02"), "edge is not above 0.02");
+  // The negation survives as the dual comparator rather than as the word
+  // "not": `not (x > n)` is `x <= n`, and this used to stop at "is not above
+  // 0.02", which the predicate parser then read as an inequality against the
+  // *text* "above 0.02" — true of every number, so the rule could never fail.
+  assert.equal(canonicalizeClause("edge should never be above 0.02"), "edge is at most 0.02");
+  assert.equal(canonicalizeClause("edge must not be below 0.02"), "edge is at least 0.02");
+  assert.equal(canonicalizeClause("edge must not exceed 0.02"), "edge is at most 0.02");
+  // A negation with no comparator to fold into keeps the word.
   assert.equal(canonicalizeClause("tier must not be Standard"), "tier is not Standard");
 });
 
@@ -79,6 +87,111 @@ test("canonicalize: a bare number in a clause survives literal restoration", () 
     canonicalizeClause('label is "x" and count is between 1 and 5'),
     'label is "x" and count is between 1 and 5'
   );
+});
+
+/* -------------------------------------------------------------------------- */
+/* R37: the equality catch-all swallowing comparisons                          */
+/* -------------------------------------------------------------------------- */
+
+test("R37: a bound written in ordinary English is a bound, not a string", () => {
+  // "under" and "over" are how people write bounds, and neither was in the
+  // table. `under 5` reached the equality catch-all and became a comparison
+  // against the *text* "under 5" — a rule no number can satisfy.
+  assert.equal(canonicalizeClause("latency is under 5"), "latency is below 5");
+  assert.equal(canonicalizeClause("throughput is over 5"), "throughput is above 5");
+  assert.equal(canonicalizeClause("latency is up to 5"), "latency is at most 5");
+  assert.equal(canonicalizeClause("size is at or above 5"), "size is at least 5");
+  assert.equal(canonicalizeClause("size is at or below 5"), "size is at most 5");
+  assert.equal(canonicalizeClause("latency exceeds 5"), "latency is above 5");
+});
+
+test("R37: a negated comparator folds into its dual instead of going quiet", () => {
+  // The dangerous direction. `is not above 100` is built from two documented
+  // words, and it parsed as an inequality against the text "above 100" —
+  // true of every reading, so the rule could never fail and the gate reported
+  // the subject green while checking nothing.
+  for (const [written, canonical] of [
+    ["latency is not above 100", "latency is at most 100"],
+    ["latency is not below 100", "latency is at least 100"],
+    ["latency is not at least 100", "latency is below 100"],
+    ["latency is not at most 100", "latency is above 100"],
+    ["latency is not over 100", "latency is at most 100"],
+    ["latency is not under 100", "latency is at least 100"],
+    ["latency must not exceed 100", "latency is at most 100"],
+    ["latency should never be above 100", "latency is at most 100"],
+  ] as const) {
+    assert.equal(canonicalizeClause(written), canonical, written);
+  }
+});
+
+test("R37: the folded rule actually fails on the reading it names", () => {
+  // End to end, because the canonical text being right is not the claim —
+  // the claim is that the gate goes red. 0.21 is above 0.0001.
+  const r = parseHeuristics(
+    `heuristic latency\n  run      node x.js\n` +
+    `  measure  ms  number after "took:"\n` +
+    `  rule     ms should never be above 0.0001\n`
+  );
+  assert.equal(r.problems.length, 0);
+  const outcome = evaluateHeuristic(r.heuristics[0], {
+    stdout: "took: 0.21\n", stderr: "", exitCode: 0,
+  });
+  assert.notEqual(outcome.failure, null, "a violated ceiling must read as violated");
+  assert.match(outcome.failure!, /0\.21/, "the witness names the reading that broke it");
+});
+
+test("R37: a comparison the vocabulary lacks is refused, not swallowed", () => {
+  // No synonym table is ever complete, so the catch-all itself has to refuse
+  // anything that reads as a comparison. Direction-ambiguous phrasings are
+  // the point: "faster than" means a ceiling for latency and a floor for
+  // throughput, and guessing either way would be silent.
+  for (const clause of [
+    "ms is faster than 5", "ms is close to 5", "ms is roughly 5",
+    "ms is 5 or more", "ms is no worse than 5", "ms is not between 1 and 5",
+  ]) {
+    const r = parseHeuristics(
+      `heuristic h\n  run      node x.js\n  measure  ms  number after "t:"\n  rule     ${clause}\n`
+    );
+    assert.equal(r.problems.length, 1, `expected a refusal for: ${clause}`);
+    assert.equal(r.problems[0].line, 4);
+    assert.ok(r.problems[0].column > 1, "the caret must point at the clause body");
+    assert.match(r.problems[0].message, /comparison/);
+  }
+});
+
+test("R37: a numeric measure compared to non-numeric text is refused", () => {
+  // One bare word is shape-identical to `mode is production`, so the clause
+  // parser cannot judge it. Here the extractor is known and an exit code is
+  // always a number, which makes the answer constant either way.
+  for (const [measure, clause, why] of [
+    ["number after \"n:\"", "n is positive", "never holds"],
+    ["the exit code", "n is nonzero", "never holds"],
+    ["count of lines matching \"x\"", "n is not clean", "never fails"],
+  ] as const) {
+    const r = parseHeuristics(
+      `heuristic h\n  run      node x.js\n  measure  n  ${measure}\n  rule     ${clause}\n`
+    );
+    assert.equal(r.problems.length, 1, `expected a refusal for: ${clause} (${why})`);
+    assert.match(r.problems[0].message, /is not a number/);
+  }
+});
+
+test("R37: the equality the catch-all exists for still parses", () => {
+  // The fix must not turn `mode is production` into an error, and a quoted
+  // value stays the escape hatch for text that reads like a comparison.
+  for (const [measure, clause] of [
+    ["json field cfg.mode", "v is production"],
+    ["json field cfg.mode", "v is not production"],
+    ["the output", "v is 1.2.3"],
+    ["the output", 'v is "under 5"'],
+    ["the exit code", "v is 0"],
+    ["count of lines matching \"x\"", "v is 3"],
+  ] as const) {
+    const r = parseHeuristics(
+      `heuristic h\n  run      node x.js\n  measure  v  ${measure}\n  rule     ${clause}\n`
+    );
+    assert.equal(r.problems.length, 0, `${clause} must still parse: ${r.problems[0]?.message}`);
+  }
 });
 
 /* -------------------------------------------------------------------------- */
@@ -1313,5 +1426,27 @@ test("fmt is a fixpoint: an empty or comment-only rules file does not grow", () 
     assert.equal(cycle(once), once, `not a fixpoint for ${JSON.stringify(input)}`);
   }
   const commentOnly = cycle("# a comment\n");
-  assert.equal(commentOnly, "# a comment\n", "comments survive; blank lines do not");
+  assert.equal(commentOnly, "# a comment\n", "comments survive; leading and trailing blanks do not");
+
+  // R38: the fixpoint must not be bought by flattening the author's
+  // paragraphs. A single blank between two comment blocks is meaning — it is
+  // how the file `ratchet init` writes separates its reference from its
+  // example — and deleting it made the tool's own scaffolding non-canonical.
+  assert.equal(cycle("# a\n\n# b\n"), "# a\n\n# b\n", "one blank between blocks survives");
+  assert.equal(cycle("# a\n\n\n\n# b\n"), "# a\n\n# b\n", "a run of blanks collapses to one");
+  assert.equal(cycle("\n\n# a\n\n\n"), "# a\n", "leading and trailing blanks go");
+});
+
+test("R38: a fresh `ratchet init` is canonical, so guard opens clean", () => {
+  // "A tool whose first run complains about its own scaffolding teaches people
+  // to ignore its warnings" — src/templates.ts, about the config template. The
+  // rules template had acquired the same defect from the R36 fix: `guard` on a
+  // brand-new project warned that heuristics.rules was not in canonical form.
+  const p = parseHeuristics(RULES_TEMPLATE);
+  assert.equal(p.problems.length, 0, "the shipped template must parse clean");
+  assert.equal(
+    formatHeuristics(p.heuristics, p.preamble),
+    RULES_TEMPLATE,
+    "the template `init` writes must already be what `fmt` would write"
+  );
 });

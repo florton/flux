@@ -1,4 +1,4 @@
-# Ratchet Field Experiments — Margin, Odds, Newportfolio, Particles
+# Ratchet Field Experiments — Margin, Odds, Newportfolio, Particles, Cold Start
 
 Four real repos, four different roles for the ratchet v0 prototype: margin
 (QA-side heuristic drift), odds (retroactive bug replay), newportfolio (branch
@@ -11,6 +11,11 @@ are in [ISSUES_RATCHET.md](ISSUES_RATCHET.md); the readings below stand, but
 the prototype they were taken with has since been rebuilt through v0.8.
 Experiments 2 and 4 have been re-run against v0.8 — see the sections under
 them. They disagree usefully about what the prose form is worth.
+
+**Experiment 5 is a different kind.** The four above ask what the ratchet
+catches. The fifth asks whether anyone can get it running — a cold start on a
+throwaway repo, from the README alone, against v0.9. It is at the bottom of
+this file.
 
 Check contract everywhere: read one JSON object on stdin, exit 0 = pass,
 nonzero = fail, stdout = the reason.
@@ -577,3 +582,86 @@ facing forward; replay and bisect are the same subject facing backward. One
 asymmetry worth carrying: a subject only catches a regression at the moment it
 lands if the subject existed first — which is what the accept ceremony and the
 journal are for: they record that a subject was installed, and why.
+
+---
+
+## Experiment 5: cold start — the README as the only instruction
+
+Called for by [NEXT_STEPS_V5.md](NEXT_STEPS_V5.md) item 3, and the one
+experiment that asks about adoption rather than about catching. Ran against
+**v0.9**, on a throwaway repo built for the purpose: a small lexical ranker
+(BM25-ish, ~45 lines), a labelled eval set of four queries over eight
+documents, and `tools/eval.js` printing `precision at 3:` and
+`mean latency ms:`. Chosen because it is the shape the ratchet is *for* — a
+number you tune rather than assert, where no single value is right and the
+only thing that matters is that it does not slide.
+
+Rule of the exercise: follow the README's seven-step loop as written, and log
+every point where the tool and the reader disagree.
+
+**Wall clock: 27 minutes**, against the 10-minute target — but the overrun is
+almost entirely one finding, below. The mechanics themselves were quick.
+
+### What worked, unprompted
+
+- `ratchet init` writes a rules file that is a **complete reference in
+  comments** — extractors, predicates, both proof routes, both
+  non-applicability clauses. Nothing else had to be opened to write the first
+  heuristic.
+- `ratchet fmt` snapped `should be at least 0.75` → `is at least 0.75` and
+  printed the before/after with line numbers. The loose-authoring promise
+  holds.
+- `guard` on a fresh `init` warned that it was **green over nothing** —
+  2 subjects declared, 0 armed rows, "a green tick here means only that there
+  was nothing to check." The v0.9 coverage warning does its job on day one.
+- The frozen-instrument warning fired correctly on `node tools/eval.js`.
+- The regression loop closed: sort comparator flipped, `precision at 3` fell
+  `0.8182 → 0.0000`, `guard` went red naming the reading, and the installed
+  pre-commit hook **blocked the commit** and printed the two ceremonies
+  (`accept`, `reaffirm`).
+
+### What did not
+
+**R37, found on the first heuristic written.** `latency should be under 5` was
+checked as a string comparison and failed forever; `latency should never be
+above 0.0001` — a phrasing this tool's own source comment cites as supported —
+passed forever, with `guard` printing `✓ standing 1/1` over a ceiling exceeded
+by ~2000x. Full account and fix in
+[OUTSTANDING_RATCHET.md](OUTSTANDING_RATCHET.md). This is the whole reason the
+exercise was worth the 27 minutes: a cold reader writes the phrasings a
+maintainer has stopped writing, and one of them was a false green.
+
+**README step 5 does not fit a healthy repo.** The loop reads
+`ratchet adopt <name> --good <an-old-ref>` as *the* step. On a repo whose
+history has no instance of the bug — which is every team adopting a *quality*
+heuristic on a green codebase — this is:
+
+```
+$ ratchet adopt search-quality --good HEAD
+ratchet: no commits between HEAD and HEAD
+```
+
+The `rejects` route is the one that applies, and the README subordinates it to
+a sub-clause of step 4. `init`'s own template gets this right (it lists both,
+side by side). The step list should match the template.
+
+**The frozen-instrument warning fires on the natural layout.** `tools/eval.js`
+inside the repo it measures is how everyone will write it first, and the fix —
+move it under `.ratchet/` and reach it through `{home}` — only matters once
+you run a *history* command. On day one it is a correct warning about a
+problem the reader does not have yet, in the same list as the ones they do.
+
+**A fresh `init` warned about its own scaffolding.** Before a heuristic was
+written, on a two-command-old repository, `guard` opened with
+`! heuristics canonical`. R38 — small, and squarely the thing the tool cannot
+afford, since a gate is worth exactly what its warnings are worth. Closed.
+
+### Carried forward
+
+- R37 and R38 are closed.
+- The step-5 wording and the frozen-instrument warning's timing are open, and
+  both are README/UX rather than defects — see
+  [NEXT_STEPS_V5.md](NEXT_STEPS_V5.md) item 3.
+- The 1,363-line README against a seven-step loop is still the shape the
+  quickstart/reference split was proposed for. Nothing in this run contradicts
+  that; the reader reached step 4 quickly and then had one long detour.

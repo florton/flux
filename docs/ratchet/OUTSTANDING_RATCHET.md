@@ -9,10 +9,13 @@ defect was reproduced by execution against a scratch project or this repository,
 and no measurement appears here that was not taken. Where something was *not*
 measured, the entry says so in those words.
 
-**Summary.** Three defects were found and fixed on the day this file was
+**Summary.** Five defects were found and fixed on the day this file was
 written; three remain open, one of them a false-green in the gate itself. The
-rest of the file is the things that were never defects — costs accepted on
-purpose, plan work not built, and decisions waiting on a human.
+newest, R37, is the most serious the tool has had: a bound written the way
+people write bounds was checked as a string comparison, in one direction
+failing forever and in the other **passing** forever with the gate reporting
+green. The rest of the file is the things that were never defects — costs
+accepted on purpose, plan work not built, and decisions waiting on a human.
 
 | # | Severity | Status | Issue |
 |---|---|---|---|
@@ -25,6 +28,8 @@ purpose, plan work not built, and decisions waiting on a human.
 | R34 | medium | **closed** | `ratchet pr-comment --json` printed markdown with exit 0 — found by `ratchet fuzz` |
 | R35 | low | **closed** | `ratchet note --json` printed plain text with exit 0 — found by `ratchet fuzz` |
 | R36 | low | **closed** | `fmt` grew a blank line into an empty or comment-only rules file on every run — found by `ratchet fuzz` |
+| R37 | **high** | **closed** | `latency is not above 100` was an inequality against the *text* "above 100" — always true, so the gate went green over a ceiling exceeded 2000x — found by the blind DX test |
+| R38 | low | **closed** | A brand-new `ratchet init` produced a `guard` warning about its own scaffolding: the R36 fix dropped every preamble blank, and the shipped template has one |
 
 ---
 
@@ -364,6 +369,116 @@ All three were found by the first two runs of `ratchet fuzz`, a command that
 did not exist when this file's other entries were written. It is now a
 standing invariant in this repository's own gate (`fuzz-clean`), wired into
 CI with a fixed seed.
+
+---
+
+## R37 — high — a bound in ordinary English was not a bound — **closed**
+
+Found by the blind DX test ([NEXT_STEPS_V5.md](NEXT_STEPS_V5.md) item 3), on
+the *first heuristic written*, before any of the usability findings that
+exercise was looking for.
+
+The vocabulary had `is below` and no `under`. Anything it did not recognize
+fell through to the equality catch-all, which compared the measure against the
+unrecognized text as a **string**. Two directions, and the second is the one
+that matters:
+
+```
+rule  latency is under 5          ->  is "under 5"   no number equals it   always red
+rule  latency is not above 100    ->  is not "above 100"  every number differs   always GREEN
+```
+
+`is not above` is built from two words this tool documents, and
+`should never be above` is named in `heuristics.ts` as a supported phrasing —
+its own source comment cites it. Reproduced end to end against the real binary
+on a scratch project whose measured latency was 0.21 ms:
+
+```
+$ cat .ratchet/heuristics.rules
+  rule     precision is at least 0.75
+  rule     latency should never be above 0.0001     # violated by ~2000x
+
+$ ratchet fmt
+    6 | latency should never be above 0.0001
+      | latency is not above 0.0001
+
+$ ratchet guard
+✓ heuristics canonical 1 heuristic(s), canonical
+✓ standing             1/1 standing invariants hold
+✓ validation           all 1 subject(s) have a proof they can fail
+guard passed
+```
+
+A green gate over a ceiling exceeded by three orders of magnitude, from a
+documented phrasing, with `fmt` reporting the snap as a success.
+
+**Why neither existing safeguard caught it.** The `rejects` check tests that
+some rule refuses a declared reading; a heuristic with one working rule and one
+dead one is certified on the strength of the working one. And in the
+always-red direction `rejects` actively *certifies* the defect: a rule that
+refuses everything trivially refuses the declared counterexample.
+
+**Measured blast radius.** Of 37 comparison-shaped phrasings, 33 parsed clean
+as an equality with a constant answer. After the fix, 0.
+
+**The fix, in three parts.** A comparator table that carries an optional `not`
+through, so the negated half of the language is translated too; De Morgan
+folding, `is not above` → `is at most`, exact on a total order; and the
+catch-all closed — a value that opens with a comparison word, ends in a number,
+or ends in a comparison word is refused with a line, a column and the
+vocabulary named. Quoting stays the escape hatch for a literal. One more check
+runs where the extractor is known: an exit code compared for equality against
+`"positive"` has a constant answer, and a bare word is invisible to the clause
+parser but obvious here.
+
+**Deliberately still refused rather than guessed:** `faster than`, `slower
+than`, `no worse than`, `close to`, `roughly`. Whether those mean a ceiling or
+a floor depends on what is measured, and the tool does not know.
+
+Six regression tests, one per direction plus the equality the catch-all exists
+for. The fuzzer's rules generator learned the same constraint — it had been
+generating `m1 is f5e427` over a line-count measure, which the new check
+correctly refuses. 223 tests; `fuzz` clean over 6 runs and 2,000 iterations.
+
+---
+
+## R38 — low — a fresh `init` warned about its own scaffolding — **closed**
+
+Found in the same cold-start run as R37, one step earlier: before writing
+anything, on a repository that was two commands old.
+
+```
+$ ratchet init
+$ ratchet guard
+! heuristics canonical heuristics.rules is not in canonical form — run `ratchet fmt` so the committed clauses are the checked clauses
+guard passed with 1 warning(s)
+```
+
+`ratchet fmt` then deleted exactly one line: the blank separating the header
+reference from the commented example, in the file `init` had just written.
+
+**Where it came from.** The R36 fix. `fmt` had been growing an empty file by a
+line per run, and the fix was to drop *every* blank line in a preamble —
+a fixpoint, and the shipped template has a paragraph break, so the template
+stopped being canonical. `formatHeuristics` even carries the comment "it must
+not be reported as non-canonical on a brand-new project"; the intent was right
+and the implementation contradicted it.
+
+**Why it matters more than one blank line.** `src/templates.ts` states the
+principle in its own words, about the config template that used to ship a
+subject pointing at a nonexistent script: *a tool whose first run complains
+about its own scaffolding teaches people to ignore its warnings.* This is a
+gate whose value rests entirely on its warnings being worth reading, and the
+first one every new user saw was noise about a file they had not touched. The
+same fix also flattened any commented rules file — an author's paragraph
+breaks were deleted on the first `fmt`.
+
+**The fix.** Normalize instead of delete: runs of blanks collapse to one, the
+ends are trimmed. Still a fixpoint — a second pass has nothing left to change
+— and the author's paragraphing survives. A regression test cycles the shipped
+`RULES_TEMPLATE` through parse → format and asserts it comes back byte-identical,
+so the template and the formatter cannot drift apart again. R36's own cases
+(empty, blank-only, comment-only) are unchanged and still pass.
 
 ---
 

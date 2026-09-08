@@ -272,6 +272,12 @@ interface GeneratedMeasure {
   name: string;
   /** True when this measure has an own (non-relational) rule to reject on. */
   ownable: boolean;
+  /**
+   * True when the extractor always reads a number. An equality against a
+   * non-numeric string over one of these has a constant answer, and the
+   * parser refuses it — so the generator must not emit one.
+   */
+  numeric: boolean;
 }
 
 interface GeneratedRule {
@@ -317,7 +323,12 @@ function generateRule(rng: Rng, measures: GeneratedMeasure[]): GeneratedRule {
     return { measure: m.name, text: `rule ${m.name} is within ${p} percent of ${of}`, rejectsValue };
   }
   if (roll < 0.52) {
-    const v = rng.str(rng.range(1, 6), "abcdef0123456789");
+    // A numeric measure only ever equals a number; over one of those the
+    // alphabet is digits, so the clause the generator emits is one the parser
+    // will accept for the same reason a human's would be.
+    const v = m.numeric
+      ? String(rng.range(0, 9999))
+      : rng.str(rng.range(1, 6), "abcdef0123456789");
     const negated = rng.chance(0.3);
     return {
       measure: m.name,
@@ -366,17 +377,17 @@ function generateRule(rng: Rng, measures: GeneratedMeasure[]): GeneratedRule {
   return { measure: m.name, text: `rule ${m.name} ${spelling} ${n}`, rejectsValue: choice.refused(n) };
 }
 
-function generateExtractorText(rng: Rng): string {
+function generateExtractorText(rng: Rng): { text: string; numeric: boolean } {
   const roll = rng.next();
   if (roll < 0.35) {
     const label = rng.pick(LABEL_POOL);
     const which = rng.chance(0.25) ? `the ${rng.pick(["2nd", "3rd"])} number after ` : "the number after ";
-    return `${which}"${label}"`;
+    return { text: `${which}"${label}"`, numeric: true };
   }
-  if (roll < 0.5) return `the json field ${rng.pick(["a", "a.b", "x.y.z", "n"])}`;
-  if (roll < 0.65) return `the count of lines matching "${rng.pick(SUBSTR_POOL)}"`;
-  if (roll < 0.8) return "exit code";
-  return "the output";
+  if (roll < 0.5) return { text: `the json field ${rng.pick(["a", "a.b", "x.y.z", "n"])}`, numeric: false };
+  if (roll < 0.65) return { text: `the count of lines matching "${rng.pick(SUBSTR_POOL)}"`, numeric: true };
+  if (roll < 0.8) return { text: "exit code", numeric: true };
+  return { text: "the output", numeric: false };
 }
 
 /** One full heuristics.rules text, generated from the vocabulary. */
@@ -400,8 +411,9 @@ export function generateRulesText(rng: Rng): string {
     const mCount = rng.range(1, 3);
     for (let j = 0; j < mCount; j++) {
       const mName = `m${j + 1}`;
-      measures.push({ name: mName, ownable: true });
-      lines.push(`  measure  ${mName} ${generateExtractorText(rng)}`);
+      const extractor = generateExtractorText(rng);
+      measures.push({ name: mName, ownable: true, numeric: extractor.numeric });
+      lines.push(`  measure  ${mName} ${extractor.text}`);
     }
 
     const rules: GeneratedRule[] = [];

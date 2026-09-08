@@ -38,6 +38,13 @@ export const RULES_TEMPLATE = `# Heuristics, in prose. Each block below is a sub
 # The four comparisons take either a number or another measure of the same
 # run, so "change is above keep" says what it looks like it says.
 #
+# Bounds written the ordinary way land on those four: "under" and "over",
+# "no more than", "must not exceed", "should never be above". A negation folds
+# into the comparison it negates, so "never above 100" is "is at most 100".
+# What the table cannot resolve it refuses with a line and a column -- it
+# never guesses. "is faster than 5" is refused on purpose: whether that is a
+# ceiling or a floor depends on what you are measuring, and only you know.
+#
 # Ways to prove a check can fail, strongest first:
 #   ratchet adopt <name> --good <old-ref>   it failed where a real bug lived
 #   rejects <measure> <value>               the rules refuse that reading

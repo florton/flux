@@ -54,6 +54,23 @@ Known defects and accepted trade-offs are in
 > between two measures, and `needs <path> exists` for "this environment cannot
 > run the check here"; and an active row re-failing finally reaches the catch
 > rate. 193 tests.
+>
+> **The cold-start run found the gate lying green.** v0.9's own README was
+> read end to end against a throwaway repo, as a new team would read it, and
+> the first heuristic written exposed the worst defect this tool has had: a
+> bound written in ordinary English was checked as a *string* comparison.
+> `latency is under 5` could never hold; `latency is not above 100` — two
+> words this README documents — could never fail, so `guard` printed
+> `✓ standing 1/1` over a ceiling exceeded by three orders of magnitude.
+> Bounds now land on the four comparisons however they are spelled, a negation
+> folds into the comparison it negates, and anything the table cannot resolve
+> is **refused** with a line and a column rather than guessed. The same run
+> found a fresh `ratchet init` warning about the file `init` had just written.
+> Both are closed, with the accounts in
+> [../docs/ratchet/OUTSTANDING_RATCHET.md](../docs/ratchet/OUTSTANDING_RATCHET.md)
+> (R37, R38) and the run itself as experiment 5 in
+> [../docs/ratchet/EXPERIMENTS_RATCHET.md](../docs/ratchet/EXPERIMENTS_RATCHET.md).
+> 224 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; the heuristics are plain text; everything is a file git
@@ -182,6 +199,33 @@ equality; the workaround was to band the raw counts and pin the denominator,
 which couples a rule that is always true to an iteration count that is free to
 change.
 
+**Bounds written the ordinary way land on those four.** `under` and `over`,
+`up to`, `at or above`, `no more than`, `exceeds`, `bigger than` — `fmt` snaps
+them, and a negation folds into the comparison it negates, because on a total
+order `not (x > n)` *is* `x ≤ n`:
+
+```
+rule  latency should never be above 100     ->  latency is at most 100
+rule  latency must not exceed 100           ->  latency is at most 100
+rule  precision is not below 0.75           ->  precision is at least 0.75
+```
+
+**What the table cannot resolve, it refuses** — with a line, a column, and the
+vocabulary named. `is faster than 5` is refused on purpose: whether "faster"
+means a ceiling or a floor depends on what is being measured, and a table that
+picked one would be guessing at the only thing the clause is for. Quote a value
+to mean it literally: `is "under 5"` compares against that text.
+
+Through v0.9 this was wrong, and wrong in the direction that matters. There was
+no `under`, and an unrecognized comparison fell through to the equality
+catch-all: `latency is under 5` became a comparison against the *string*
+`"under 5"`, which no number equals, so the rule failed forever. `latency is
+not above 100` — two words this README documents — became an *in*equality
+against `"above 100"`, which every number satisfies, so the rule **passed**
+forever and the gate reported the subject green while checking nothing. Both
+are now translated or refused; the full account is
+[R37](../docs/ratchet/OUTSTANDING_RATCHET.md).
+
 **A `note` is not a rule.** It is prose the vocabulary cannot express, it is
 never checked, and it is excluded from every rule count — listed as
 `(prose only, never checked)` so it is never mistaken for a guarantee. A
@@ -250,8 +294,21 @@ own generator), and it reaches Node processes only — anything else gets
    vocabulary. For anything needing arbitrary computation, add a scripted
    subject to `.ratchet/config.json` instead: a `check` command that reads one
    input as JSON on stdin and exits 0 (pass) or nonzero (fail).
-5. `ratchet adopt <name> --good <an-old-ref>` — prove it against your own
-   history and arm it in one step.
+5. Prove it can fail. **Two routes, and which one applies is a fact about your
+   repository, not a preference:**
+   - Your history contains the bug this heuristic is about:
+     `ratchet adopt <name> --good <an-old-ref>` arms it against that history in
+     one step. The stronger proof — it failed where a real defect lived.
+   - It does not — the property has simply always held here, which is the
+     normal case for a *quality* number on a healthy codebase. Add a
+     `rejects <measure> <a value the rules must refuse>` line. The tool
+     **checks** the declaration, and the subject then enforces as a standing
+     invariant with no corpus row behind it.
+
+   Reaching for `adopt` on a repo with no such bug is the common first
+   mis-step; it exits 1 (`no commits between HEAD and HEAD` on a young repo)
+   and there is nothing to fix, because there was never a failure to arm
+   against.
 6. `ratchet hooks install` — make it enforce on every commit.
 7. Optionally wire capture to your test runner: a fast-check reporter
    (`demo/setup.js` generates a working one), CI's JUnit XML, or a TAP stream.
@@ -1316,7 +1373,7 @@ npm run build
 npm test
 ```
 
-193 tests: one regression test per defect closed from the v0 review, the visual
+224 tests: one regression test per defect closed from the v0 review, the visual
 codec/diff/loop tests, the v0.7 additions — canonicalization and its
 failure modes, every extractor and predicate, the probe's outcomes and
 its seeding, the capture gate, `guard`, the hook installer, and the

@@ -191,19 +191,14 @@ const SYNONYMS: [RegExp, string][] = [
   [/\bis\s+no\s+more\s+than\b/g, "is at most"],
   [/\bis\s+not\s+less\s+than\b/g, "is at least"],
   [/\bis\s+not\s+more\s+than\b/g, "is at most"],
-  [/\bis\s+greater\s+than\s+or\s+equal\s+to\b/g, "is at least"],
-  [/\bis\s+less\s+than\s+or\s+equal\s+to\b/g, "is at most"],
-  [/\bis\s+greater\s+than\b/g, "is above"],
-  [/\bis\s+more\s+than\b/g, "is above"],
-  [/\bis\s+larger\s+than\b/g, "is above"],
-  [/\bis\s+higher\s+than\b/g, "is above"],
-  [/\bis\s+less\s+than\b/g, "is below"],
-  [/\bis\s+fewer\s+than\b/g, "is below"],
-  [/\bis\s+smaller\s+than\b/g, "is below"],
-  [/\bis\s+lower\s+than\b/g, "is below"],
   [/\bis\s+in\s+the\s+range\b/g, "is between"],
   [/\bis\s+equal\s+to\b/g, "is"],
   [/\bequals\b/g, "is"],
+  // Bare verbs, normalized to the copula the comparator table anchors on.
+  // The `is exceeds` form is ungrammatical but reachable by editing, and
+  // rewriting it here keeps it from colliding with that table.
+  [/\bis\s+exceeds\b/g, "is above"],
+  [/\bexceeds\b/g, "is above"],
   [/\bis\s+never\b/g, "is not"],
   [/\bis\s+always\b/g, "is"],
   [/\bdoes\s+not\s+include\b/g, "does not contain"],
@@ -213,6 +208,73 @@ const SYNONYMS: [RegExp, string][] = [
   [/\bis\s+missing\b/g, "is empty"],
   [/\bis\s+numeric\b/g, "is a number"],
   [/\bis\s+the\s+same\s+value\s+as\b/g, "is the same as"],
+];
+
+/**
+ * Comparator spellings, normalized to the four the grammar has.
+ *
+ * Separate from the table above because a negation rides through: "must never
+ * exceed 100" reaches here as `is not exceed 100`, and a table anchored on a
+ * bare `is` would leave the negated half of the language untranslated — which
+ * is exactly where the damage was. `is not above 100` is built from two
+ * documented words and parsed as an equality against the string "above 100",
+ * so it could never fail and the gate reported it green.
+ *
+ * Longest phrase first inside each group, so "greater than or equal to" is
+ * not eaten by "greater than".
+ *
+ * Deliberately absent: "faster than", "slower than", "no worse than", "close
+ * to", "roughly". Which direction each of those bounds depends on what the
+ * measure means — a latency wants a ceiling and a throughput wants a floor —
+ * and a table that guessed would silently pick one. They are refused at the
+ * catch-all instead, with the vocabulary named.
+ */
+const COMPARATORS: [RegExp, string][] = [
+  [/\bis(\s+not)?\s+greater\s+than\s+or\s+equal\s+to\b/g, "is$1 at least"],
+  [/\bis(\s+not)?\s+less\s+than\s+or\s+equal\s+to\b/g, "is$1 at most"],
+  [/\bis(\s+not)?\s+at\s+or\s+above\b/g, "is$1 at least"],
+  [/\bis(\s+not)?\s+at\s+or\s+below\b/g, "is$1 at most"],
+  [/\bis(\s+not)?\s+a\s+minimum\s+of\b/g, "is$1 at least"],
+  [/\bis(\s+not)?\s+a\s+maximum\s+of\b/g, "is$1 at most"],
+  [/\bis(\s+not)?\s+at\s+minimum\b/g, "is$1 at least"],
+  [/\bis(\s+not)?\s+at\s+maximum\b/g, "is$1 at most"],
+  [/\bis(\s+not)?\s+minimum\s+of\b/g, "is$1 at least"],
+  [/\bis(\s+not)?\s+maximum\s+of\b/g, "is$1 at most"],
+  [/\bis(\s+not)?\s+up\s+to\b/g, "is$1 at most"],
+  [/\bis(\s+not)?\s+greater\s+than\b/g, "is$1 above"],
+  [/\bis(\s+not)?\s+more\s+than\b/g, "is$1 above"],
+  [/\bis(\s+not)?\s+larger\s+than\b/g, "is$1 above"],
+  [/\bis(\s+not)?\s+higher\s+than\b/g, "is$1 above"],
+  [/\bis(\s+not)?\s+bigger\s+than\b/g, "is$1 above"],
+  [/\bis(\s+not)?\s+longer\s+than\b/g, "is$1 above"],
+  [/\bis(\s+not)?\s+less\s+than\b/g, "is$1 below"],
+  [/\bis(\s+not)?\s+fewer\s+than\b/g, "is$1 below"],
+  [/\bis(\s+not)?\s+smaller\s+than\b/g, "is$1 below"],
+  [/\bis(\s+not)?\s+lower\s+than\b/g, "is$1 below"],
+  [/\bis(\s+not)?\s+shorter\s+than\b/g, "is$1 below"],
+  [/\bis(\s+not)?\s+exceed(?:s|ing)?\b/g, "is$1 above"],
+  [/\bis(\s+not)?\s+beneath\b/g, "is$1 below"],
+  [/\bis(\s+not)?\s+under\b/g, "is$1 below"],
+  [/\bis(\s+not)?\s+over\b/g, "is$1 above"],
+];
+
+/**
+ * `not` folded into the comparator it negates. On a total order the dual is
+ * exact — `not (x > n)` is `x <= n` — so this is arithmetic rather than
+ * interpretation, and it is what lets "should never be above 100" mean what
+ * it says instead of falling through to the equality catch-all.
+ *
+ * Applied in sequence after the table above: each rewrite removes the `not`
+ * it consumed, so no later pattern can match the same clause twice.
+ *
+ * `is not between` has no dual — the complement of a band is two bands — and
+ * is left for the catch-all to refuse by name.
+ */
+const NEGATED_COMPARATORS: [RegExp, string][] = [
+  [/\bis\s+not\s+above\b/g, "is at most"],
+  [/\bis\s+not\s+below\b/g, "is at least"],
+  [/\bis\s+not\s+at\s+least\b/g, "is below"],
+  [/\bis\s+not\s+at\s+most\b/g, "is above"],
 ];
 
 /**
@@ -267,6 +329,8 @@ export function canonicalizeClause(body: string): string {
   // through to the equality catch-all and silently becomes a string compare.
   s = s.replace(/\bthe\s+(?!same\b|range\b)/g, "");
   for (const [re, to] of SYNONYMS) s = s.replace(re, to);
+  for (const [re, to] of COMPARATORS) s = s.replace(re, to);
+  for (const [re, to] of NEGATED_COMPARATORS) s = s.replace(re, to);
   // "between -0.03 to 0.015" is the other common way to write a band.
   s = s.replace(/\bis\s+between\s+(\S+)\s+to\s+/g, "is between $1 and ");
   s = s.replace(/\s+/g, " ").trim();
@@ -528,6 +592,96 @@ export function parseRule(
 /** Leading words of every comparison phrase, for near-miss detection. */
 const COMPARATOR_WORDS = ["above", "below", "between", "within", "at least", "at most", "one of", "empty", "a number", "the same as", "not"];
 
+/**
+ * Words that open a comparison the canonicalizer could not fold. A value
+ * starting with one of these is a bound this vocabulary does not have, not a
+ * string the author wanted compared for equality.
+ */
+const COMPARISON_OPENERS = new Set([
+  "above", "below", "between", "within", "at", "least", "most", "under", "over",
+  "beneath", "beyond", "exceed", "exceeds", "exceeding", "greater", "less",
+  "more", "fewer", "larger", "smaller", "higher", "lower", "bigger", "longer",
+  "shorter", "faster", "slower", "close", "near", "nearly", "roughly", "around",
+  "approximately", "about", "minimum", "maximum", "min", "max", "up", "no",
+  "worse", "better", "before", "after", "within",
+]);
+
+/**
+ * Extractors whose reading is always a number. `output` and `json field` are
+ * absent on purpose: both can legitimately yield a string, and `status is ok`
+ * over a JSON field is the equality the catch-all is for.
+ */
+const ALWAYS_NUMERIC = new Set<Extractor["kind"]>(["number-after", "line-count", "exit-code"]);
+
+const DESCRIBE_NUMERIC: Record<string, string> = {
+  "number-after": "a number read out of the output",
+  "line-count": "a count of lines",
+  "exit-code": "an exit code",
+};
+
+/** The four comparisons this grammar has, for an error message that teaches. */
+const COMPARISON_HELP =
+  "the comparisons are `is above N`, `is below N`, `is at least N`, `is at most N`, " +
+  "`is between N and M` and `is within P percent of N`";
+
+/**
+ * Refuse a catch-all value that reads as a comparison, or return undefined to
+ * let it through as the equality it looks like.
+ *
+ * `is X` is the catch-all, and a catch-all swallows whatever it is handed.
+ * Two readings were being swallowed, and the second is the dangerous one:
+ *
+ *   `latency is under 5`          equality against "under 5"  — never holds
+ *   `latency is not above 100`    inequality against the same — never fails
+ *
+ * The first sits in the file looking like a guarantee and fails forever; a
+ * `rejects` line even certifies it, because a rule that refuses everything
+ * trivially refuses the declared counterexample. The second is worse: it
+ * passes forever, and the gate reports the subject green while checking
+ * nothing. Both were reachable from words this tool documents.
+ *
+ * Three shapes are refused. A near-miss spelling (`is abov 5`) was already
+ * caught and still is. A value opening with a comparison word is a bound the
+ * canonicalizer did not know. A multi-word value ending in a number is a
+ * comparison written in words that are not in the table at all.
+ *
+ * A single bare word is deliberately let through — `mode is production` is the
+ * equality this branch exists for — and a quoted value is never examined, so
+ * `is "under 5"` remains the way to say that literal string.
+ */
+function refuseComparisonShape(
+  value: string,
+  negated: boolean
+): { error: string; suggestion?: string } | undefined {
+  const words = value.split(/\s+/);
+  const clause = negated ? "is not" : "is";
+  const first = words[0].toLowerCase().replace(/[^a-z]/g, "");
+
+  const guess = first.length >= 3 ? nearest(first, COMPARATOR_WORDS) : undefined;
+  if (guess !== undefined && guess !== first) {
+    return { error: `"${clause} ${words[0]}" is not a comparison`, suggestion: `${clause} ${guess}` };
+  }
+
+  if (words.length < 2) return undefined;
+
+  // "5 or more" puts the comparison at the end, where neither of the other two
+  // signals reaches it: the value opens with a number and closes with a word.
+  const last = words[words.length - 1].toLowerCase().replace(/[^a-z]/g, "");
+  const opensWithComparison = COMPARISON_OPENERS.has(first);
+  const endsWithNumber = parseNumber(words[words.length - 1]) !== undefined;
+  const endsWithComparison = words.length > 2 && COMPARISON_OPENERS.has(last);
+  if (!opensWithComparison && !endsWithNumber && !endsWithComparison) return undefined;
+
+  return {
+    error:
+      `\`${clause} ${value}\` reads as a comparison, and this vocabulary has no such comparison — ` +
+      `so it would be checked as ${negated ? "an inequality" : "an equality"} against the text ` +
+      `${JSON.stringify(value)}, which can never ${negated ? "fail" : "hold"}. ` +
+      COMPARISON_HELP +
+      `. If you meant the literal text, quote it: ${clause} ${JSON.stringify(value)}`,
+  };
+}
+
 /** The declared measure this text names, if any. Longest name wins. */
 function measureNamed(text: string, known: string[]): string | undefined {
   const t = text.trim();
@@ -592,21 +746,14 @@ function parsePredicate(rest: string, known: string[] = []): Predicate | { error
   }
   if ((m = /^starts with\s+(.+)$/i.exec(rest))) return { kind: "starts-with", value: unquote(m[1]) ?? m[1].trim() };
   if ((m = /^ends with\s+(.+)$/i.exec(rest))) return { kind: "ends-with", value: unquote(m[1]) ?? m[1].trim() };
-  if ((m = /^is not\s+(.+)$/i.exec(rest))) return { kind: "is", value: unquote(m[1]) ?? m[1].trim(), negated: true };
-  if ((m = /^is\s+(.+)$/i.exec(rest))) {
-    const value = unquote(m[1]);
+  if ((m = /^is(\s+not)?\s+(.+)$/i.exec(rest))) {
+    const negated = m[1] !== undefined;
+    const value = unquote(m[2]);
     if (value === undefined) {
-      // `is X` is the catch-all, and a catch-all swallows typos: "is abov 5"
-      // would parse as equality against the string "abov 5" — a rule that can
-      // never hold, sitting in the file looking like a guarantee. A first word
-      // that is *nearly* a comparator is a misspelling, not a value.
-      const first = m[1].trim().split(/\s+/)[0];
-      const guess = first.length >= 3 ? nearest(first, COMPARATOR_WORDS) : undefined;
-      if (guess !== undefined && guess !== first.toLowerCase()) {
-        return { error: `"is ${first}" is not a comparison`, suggestion: `is ${guess}` };
-      }
+      const refusal = refuseComparisonShape(m[2].trim(), negated);
+      if (refusal !== undefined) return refusal;
     }
-    return { kind: "is", value: value ?? m[1].trim(), negated: false };
+    return { kind: "is", value: value ?? m[2].trim(), negated };
   }
 
   const head = rest.split(/\s+/).slice(0, 3).join(" ");
@@ -958,11 +1105,33 @@ export function parseHeuristics(source: string, canonicalizeFirst = true): Parse
       // A relational rule naming a measure that does not exist would sit in
       // the file looking like a guarantee while comparing against nothing.
       const other = r.predicate.kind === "same-as" || r.predicate.kind === "compare" ? r.predicate.measure : undefined;
-      if (other === undefined || h.measures.some((x) => x.name === other)) continue;
+      if (other !== undefined && !h.measures.some((x) => x.name === other)) {
+        problems.push({
+          line: r.line, column: 1, text: r.text,
+          message: `\`${describePredicate(r.predicate)}\` names something "${h.name}" does not measure`,
+          suggestion: nearest(other, h.measures.map((x) => x.name)),
+        });
+        continue;
+      }
+
+      // A numeric measure compared for equality against text that is not a
+      // number. The clause parser cannot see this — `is positive` is one bare
+      // word, indistinguishable in shape from the `mode is production` that
+      // the equality branch exists for — but here the extractor is known, and
+      // an exit code or a `number after` reading is always a number. So the
+      // comparison has a constant answer: never equal, or, negated, always
+      // unequal, which is the direction that reports the subject green.
+      if (r.predicate.kind !== "is") continue;
+      const value = r.predicate.value;
+      if (typeof value !== "string" || value.trim() === "" || parseNumber(value) !== undefined) continue;
+      const m = h.measures.find((x) => x.name === r.measure);
+      if (m === undefined || !ALWAYS_NUMERIC.has(m.extractor.kind)) continue;
       problems.push({
         line: r.line, column: 1, text: r.text,
-        message: `\`${describePredicate(r.predicate)}\` names something "${h.name}" does not measure`,
-        suggestion: nearest(other, h.measures.map((x) => x.name)),
+        message:
+          `"${r.measure}" is ${DESCRIBE_NUMERIC[m.extractor.kind]}, and ${JSON.stringify(value)} is not a number, ` +
+          `so \`${describePredicate(r.predicate)}\` can never ${r.predicate.negated ? "fail" : "hold"}. ` +
+          COMPARISON_HELP,
       });
     }
 
@@ -1045,12 +1214,24 @@ export function formatHeuristics(heuristics: Heuristic[], preamble: string[] = [
   // `ratchet init` writes, and it must not be reported as non-canonical on a
   // brand-new project.
   if (heuristics.length === 0) {
-    // Blank lines are cosmetic and are dropped: rendering an empty line and
-    // re-parsing it yields two, so keeping them would make `fmt` grow the
-    // file by one line on every run — a formatter that is not a fixpoint.
-    // Comments are the author's reasoning and are preserved.
-    const comments = preamble.filter((l) => l.trim() !== "");
-    return comments.length === 0 ? "" : comments.map((l) => l.trimEnd()).join("\n") + "\n";
+    // R36 fixed a formatter that grew the file by a line on every run, and it
+    // fixed it by dropping every blank line in the preamble. That is a
+    // fixpoint, but it flattens an author's comment paragraphs into one wall
+    // of text — and the file `ratchet init` writes has such a paragraph
+    // break, so the tool's own scaffolding came out non-canonical and a brand
+    // new `guard` opened with a warning about a file the user had not touched.
+    //
+    // Normalizing instead of deleting keeps both properties: runs of blanks
+    // collapse to one and the ends are trimmed, so a second pass has nothing
+    // left to change.
+    const trimmed = preamble.map((l) => l.trimEnd());
+    const out: string[] = [];
+    for (const line of trimmed) {
+      if (line === "" && (out.length === 0 || out[out.length - 1] === "")) continue;
+      out.push(line);
+    }
+    while (out.length > 0 && out[out.length - 1] === "") out.pop();
+    return out.length === 0 ? "" : out.join("\n") + "\n";
   }
   return heuristics.map(renderHeuristic).join("\n\n") + "\n";
 }

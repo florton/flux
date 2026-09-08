@@ -6,6 +6,17 @@
 > [../../ratchet/README.md](../../ratchet/README.md); what is broken or open is in
 > [OUTSTANDING_RATCHET.md](OUTSTANDING_RATCHET.md).
 
+> **Update, 2026-09-07 (later) — item 3 is done, and it found R37.** The blind
+> DX test ran against a throwaway ranking repo and hit a **false green** on the
+> first heuristic written: a bound written in ordinary English was checked as a
+> string comparison, so `latency should never be above 0.0001` passed forever
+> while the real reading was 0.21. Fixed, with six regression tests; the
+> account is [R37](OUTSTANDING_RATCHET.md) and the run is experiment 5 in
+> [EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md). Two usability findings from
+> the same run are left open under item 3 below. It also found R38: a brand-new
+> `ratchet init` opened its first `guard` with a warning about the file `init`
+> had just written. 224 tests.
+
 > **Status, 2026-09-07 — the secondary verifier is built and self-hosting.**
 > `ratchet fuzz` exists, is wired into the gate and CI, and has already found
 > three real defects (R34–R36). 9,707 lines of `src`, 217 tests, and the
@@ -70,14 +81,27 @@ and the README gets the sentence that sells: zero-dependency, statically
 clean, gate-fuzzed. Also `npm audit` (trivially clean with no deps) and a
 tsconfig-strictness check.
 
-### 3. The blind DX test (the usability half)
+### 3. The blind DX test — **run**; two findings still open
 
-Cold-start the README's core loop — install, `init`, write a heuristic, `fmt`,
-`adopt`, `guard` — against a throwaway repo, from the README alone, logged and
-timed against the 10-minute rule. Findings become the fifth field experiment
-in [EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md), and the likely outcome is
-a quickstart/reference split of the README: it is currently 1,100+ lines of
-detail around a seven-step loop.
+Done. 27 minutes against the 10-minute target, written up as experiment 5 in
+[EXPERIMENTS_RATCHET.md](EXPERIMENTS_RATCHET.md). The overrun was one defect
+(R37); a second (R38) turned up before the first heuristic was even written.
+Both closed. What it left open is small and specific:
+
+- **README step 5 does not fit a healthy repo.** The loop reads `ratchet adopt
+  <name> --good <an-old-ref>` as *the* step, and a team adopting a quality
+  heuristic on a green codebase has no bad commit to point at — `adopt` exits
+  1 with `no commits between HEAD and HEAD`. The `rejects` route is the one
+  that applies and is subordinated to a sub-clause of step 4. `init`'s own
+  template already lists both side by side; the step list should match it.
+- **The frozen-instrument warning fires on the natural layout.**
+  `node tools/eval.js` from inside the repo it measures is how everyone writes
+  it first, and the warning only bites once a *history* command runs. Correct,
+  but shown on day one next to warnings the reader can act on. Worth gating on
+  whether the repository has ever run `replay`, `bisect` or `adopt`.
+- The quickstart/reference split still stands as the likely shape: 1,363 lines
+  of detail around a seven-step loop, and the cold reader reached step 4 fast
+  and then had one long detour.
 
 ### 4. Fuzz v2 — the deferred half of the design
 
