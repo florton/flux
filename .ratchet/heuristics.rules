@@ -19,10 +19,10 @@ heuristic test-suite
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   rule     failing is 0
-  rule     passing is at least 206
+  rule     passing is at least 217
   rule     status is one of 0, 1
   rejects  failing 1
-  rejects  passing 205
+  rejects  passing 216
   rejects  status 7
   note     the exit code is measured so that a red suite is judged by its own
   note     counts -- "failing measured 1" -- instead of short-circuiting as a
@@ -127,3 +127,27 @@ heuristic visual-diff-is-sound
   because  a baseline pin is worth exactly what the comparator is worth -- a
   because  diff with a false negative pins nothing, and reports success while
   because  it does it
+
+# The secondary verifier, run inside the gate it attacks.
+#
+# `ratchet fuzz` mutates synthetic corpus/journal/config/rules state, fuzzes the
+# CLI surface, and fuzzes the rules grammar against the oracle invariants (no
+# unhandled crash, fsck detects every content-addressed id mismatch, --json is
+# honored, fmt is a fixpoint). It has already found three real defects: two
+# commands that ignored --json with exit 0, and a formatter that grew a blank
+# line into an empty rules file on every run.
+#
+# The instrument is a wrapper rather than the binary itself, for the same
+# reason cli-end-to-end is: the frozen-instrument detector must see a program
+# outside the tree it measures, or the gate warns on every commit.
+
+heuristic fuzz-clean
+  run      node {home}/tools/fuzz-gate.js
+  timeout  600000
+  owns     .ratchet/tools/fuzz-gate.js
+  applies  when ratchet/dist/src/index.js exists
+  measure  status  exit code
+  rule     status is 0
+  rejects  status 1
+  because  the fuzzer must stay clean against a fixed seed, or a regression in
+  because  the gate's own machinery is discovered only after it ships

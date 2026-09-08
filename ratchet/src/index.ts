@@ -19,6 +19,7 @@ import { installHook, uninstallHook, hookStatus } from "./hooks";
 import { adopt, formatAdopt } from "./adopt";
 import { renderComment } from "./pr-comment";
 import { yieldReport, formatYield } from "./yield";
+import { fuzzMain } from "./fuzz-cli";
 import { loadSubjects } from "./paths";
 import { loadHeuristics } from "./heuristic-config";
 import { validatedSubjects } from "./validate";
@@ -50,6 +51,10 @@ function usage(): string {
   ratchet note --text "..." [--actor name]
   ratchet report                   corpus stats and churn summary
   ratchet fsck                     corpus and journal integrity check
+  ratchet fuzz [--seed N] [--iterations N] [--targets state,cli,rules]
+                                   the secondary verifier: mutate the gate's
+                                   state, fuzz the CLI surface, and fuzz the
+                                   rules grammar against the oracle invariants
   ratchet bisect <id> --from <older-ref> --to <newer-ref> [--setup "npm ci"]
                                    names the boundary and which way it runs
   ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
@@ -117,6 +122,7 @@ const VALUE_FLAGS = new Set([
   "--every", "--known-bad", "--known-good", "--input", "--confirm",
   "--route", "--file", "--viewport", "--tolerance", "--max-percent",
   "--wait-ms", "--out", "--command", "--stale-after", "--title",
+  "--seed", "--iterations", "--targets", "--max-findings",
 ]);
 
 function parseArgs(args: string[]): Args {
@@ -327,16 +333,20 @@ async function main(): Promise<void> {
       const dir = homeDir(cwd);
       const results = await verify(cwd, { ratchetHome: dir, quiet: true });
       const config = loadSubjects(dir);
-      const markdown = renderComment({
-        results,
-        report: reportData(cwd),
-        yields: yieldReport(dir, config, validatedSubjects(cwd, dir, config), {
-          fromRules: config.fromRules,
-          proofs: subjectProofs(cwd, dir, config),
-        }),
-        title: flags.get("--title"),
+      const report = reportData(cwd);
+      const yields = yieldReport(dir, config, validatedSubjects(cwd, dir, config), {
+        fromRules: config.fromRules,
+        proofs: subjectProofs(cwd, dir, config),
       });
-      console.log(markdown);
+      const title = flags.get("--title");
+      if (json) {
+        // Every command takes --json; the markdown is the render, not the
+        // payload. Structured consumers read the same numbers the comment
+        // states, and the renderer stays a pure function of them.
+        console.log(JSON.stringify({ results, report, yields, title }, null, 2));
+      } else {
+        console.log(renderComment({ results, report, yields, title }));
+      }
       break;
     }
 
@@ -479,13 +489,14 @@ async function main(): Promise<void> {
         console.error('usage: ratchet note --text "..."');
         process.exit(1);
       }
-      appendJournal(path.join(homeDir(cwd), "journal.jsonl"), {
+      const event = {
         at: new Date().toISOString(),
-        kind: "decision",
+        kind: "decision" as const,
         actor: flags.get("--actor") ?? "human",
         text,
-      });
-      console.log("journal entry appended");
+      };
+      appendJournal(path.join(homeDir(cwd), "journal.jsonl"), event);
+      emit(json, event, "journal entry appended");
       break;
     }
 
@@ -500,6 +511,13 @@ async function main(): Promise<void> {
       const result = fsck(homeDir(cwd), cwd);
       emit(json, result, formatFsck(result));
       if (!result.ok) process.exit(1);
+      break;
+    }
+
+    case "fuzz": {
+      // The fuzzer is self-contained: it builds a synthetic scratch home and
+      // attacks that, so it needs no repository and touches nothing here.
+      await fuzzMain({ flags, bools });
       break;
     }
 

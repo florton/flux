@@ -22,6 +22,9 @@ purpose, plan work not built, and decisions waiting on a human.
 | R31 | **medium** | **open** | A scripted subject with no rows is never run, and the gate affirms it by name anyway |
 | R32 | low | **open** | A rule-failure witness names the count, not the cause: "failing measured 1" without which test |
 | R33 | low | **open** | The `passing` floor counts non-test helper modules as tests |
+| R34 | medium | **closed** | `ratchet pr-comment --json` printed markdown with exit 0 — found by `ratchet fuzz` |
+| R35 | low | **closed** | `ratchet note --json` printed plain text with exit 0 — found by `ratchet fuzz` |
+| R36 | low | **closed** | `fmt` grew a blank line into an empty or comment-only rules file on every run — found by `ratchet fuzz` |
 
 ---
 
@@ -293,7 +296,6 @@ rather than a bug fix, which is why it is filed here rather than done.
 ---
 
 ## R33 — low — **open** — the floor counts things that are not tests
-
 `node --test <dir>` treats every `.js` file under the directory as a test file,
 including helper modules that declare no tests, and reports each as one passing
 entry:
@@ -315,6 +317,53 @@ remembering if the floor is ever raised to a number that has to mean something.
 The obvious fix is worse than the defect: naming test files explicitly in the
 `run` line would mean a newly added test file is silently not run, which is the
 exact failure this heuristic exists to prevent.
+
+---
+
+## R34 — medium — `pr-comment --json` was not JSON — **closed**
+
+Found by `ratchet fuzz` on its first real run, minimized to `ratchet
+pr-comment --json`: exit 0, stdout was the markdown comment. Every command is
+documented to take `--json`, and `pr-comment` had never wired it — `--json`
+existed since v0.3 and the case simply called `renderComment` and printed.
+
+**The fix.** The payload is built first — `results`, `report`, `yields` — and
+the markdown is a pure render of it. With `--json` the payload is emitted;
+without it, the render. Structured consumers read the same numbers the comment
+states, and the renderer stays a pure function.
+
+---
+
+## R35 — low — `note --json` was not JSON — **closed**
+
+Same run, minimized to `ratchet note --text --json`: exit 0, stdout "journal
+entry appended". The note case printed a fixed string and never consulted the
+`json` flag at all.
+
+**The fix.** The appended journal event is now built as a value, appended, and
+emitted through the same `emit(json, ...)` path every other command uses.
+
+---
+
+## R36 — low — `fmt` was not a fixpoint on an empty rules file — **closed**
+
+Found by the rules target, minimized to the empty string: `parseHeuristics("")`
+returned a preamble of one blank line, `formatHeuristics` rendered it as
+`"\n"`, and re-parsing yielded *two* blanks — every `ratchet fmt` grew the
+file by one line, forever. The same applied to any comment-only file with a
+blank line in it.
+
+**The fix.** Blank lines in a preamble are cosmetic and are dropped when
+rendering; comments are the author's reasoning and are preserved. `fmt` is now
+a fixpoint for empty, blank, and comment-only files, with a regression test
+that cycles each through parse → format twice and asserts stability. The
+rules-target oracle (`fmt-not-idempotent`, `fmt-changed-semantics`) keeps the
+property enforced from now on.
+
+All three were found by the first two runs of `ratchet fuzz`, a command that
+did not exist when this file's other entries were written. It is now a
+standing invariant in this repository's own gate (`fuzz-clean`), wired into
+CI with a fixed seed.
 
 ---
 

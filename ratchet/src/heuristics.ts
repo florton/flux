@@ -1045,7 +1045,12 @@ export function formatHeuristics(heuristics: Heuristic[], preamble: string[] = [
   // `ratchet init` writes, and it must not be reported as non-canonical on a
   // brand-new project.
   if (heuristics.length === 0) {
-    return preamble.length === 0 ? "" : preamble.map((l) => l.trimEnd()).join("\n") + "\n";
+    // Blank lines are cosmetic and are dropped: rendering an empty line and
+    // re-parsing it yields two, so keeping them would make `fmt` grow the
+    // file by one line on every run — a formatter that is not a fixpoint.
+    // Comments are the author's reasoning and are preserved.
+    const comments = preamble.filter((l) => l.trim() !== "");
+    return comments.length === 0 ? "" : comments.map((l) => l.trimEnd()).join("\n") + "\n";
   }
   return heuristics.map(renderHeuristic).join("\n\n") + "\n";
 }

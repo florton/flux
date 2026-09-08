@@ -675,6 +675,9 @@ ratchet reopen <id> --reason "..." [--actor name]
 ratchet note --text "..." [--actor name]
 ratchet report                    corpus stats and churn summary
 ratchet fsck                      corpus and journal integrity check
+ratchet fuzz [--seed N] [--iterations N] [--targets state,cli,rules]
+                                   the secondary verifier: mutate the gate's state,
+                                   fuzz the CLI surface, and fuzz the rules grammar
 ratchet bisect <id> --from <older-ref> --to <newer-ref> [--setup "npm ci"]
                                   names the boundary and which way it runs
 ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
@@ -931,6 +934,56 @@ hand-edited or corrupted row is mechanically detectable.
 
 `verify` refuses to run at all against a corpus with unreadable lines — a row
 hidden behind a parse error is a false pass — and names the line.
+
+## The secondary verifier: `ratchet fuzz`
+
+`guard` proves the *rows hold*. `fuzz` attacks the *machinery that produces
+rows* — the parsers, the fold, the judges, the CLI surface. It is a shipped
+command rather than a test file because a check that lives in the test suite
+only runs where the tests run.
+
+Three targets, each aimed at a measured defect class (of the twenty-one v0
+review defects, sixteen sat at the process boundary — on the CLI surface or in
+an error path — and not one in a data structure):
+
+| Target | What it mutates | The invariants it checks |
+|---|---|---|
+| `state` | synthetic corpus/journal/config/rules files | `guard` never throws; `fsck` detects exactly the rows whose id does not match their content; unreadable lines are named by line number; the gate is deterministic |
+| `cli` | random argv against the real binary | exit 0 or 1 with a first-class message, never a stack trace; `--json` with exit 0 emits JSON |
+| `rules` | grammar-generated and mutated heuristics.rules | the parser never throws; problems carry line and column; `fmt` is a fixpoint and never changes a heuristic's canonical text |
+
+```
+$ ratchet fuzz --seed 20260907 --iterations 300
+fuzz: state,cli,rules · 300 iteration(s) each · seed 20260907
+✓ state    clean
+✓ cli      clean
+✓ rules    clean
+
+fuzz passed — no oracle violated
+```
+
+Determinism is the ratchet's own standard: one seed, one stream, findings
+reproduced from seed + iteration. The state target mutates a *synthetic*
+scratch home, never the repository's own — fuzzing your real corpus would mean
+rewriting your memory. A finding is minimized the way `capture` minimizes a
+counterexample, so the report shows the smallest repro rather than a different
+bug that happened to also crash:
+
+```
+✗ cli      1 finding(s)
+  [invalid-json] iteration 93: --json stdout does not parse (Unexpected token 'j', "journal en"...):
+  repro: ratchet note --text c5ba326 --json
+```
+
+Exit 1 when any invariant is violated, 0 when all hold; `--json` emits the
+full report for CI. Honest limits, stated the way this tool states them: no
+oracle can detect a mutation that preserves every property it checks — a
+fuzzer is evidence, not a proof — and the PNG decoder, the worktree machinery,
+and instrument execution are covered by the test suite instead.
+
+The fuzzer already paid for itself in this repository: its first runs found
+that two commands ignored `--json` while exiting 0, and that `fmt` grew a
+blank line into an empty rules file on every run.
 
 ## The owning rule, and quarantine
 

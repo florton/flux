@@ -1297,3 +1297,21 @@ test("an unreadable measure quotes both ends of the output too", () => {
   assert.match(e.failure!, /line 0/);
   assert.match(e.failure!, /the last word/);
 });
+
+test("fmt is a fixpoint: an empty or comment-only rules file does not grow", () => {
+  // Found by `ratchet fuzz`: parseHeuristics("") returned a one-blank-line
+  // preamble, formatHeuristics rendered it as "\n", and re-parsing yielded
+  // two blanks — every `fmt` added a line to a file nobody had touched.
+  const cycle = (source: string): string => {
+    const p = parseHeuristics(source);
+    assert.equal(p.problems.length, 0);
+    return formatHeuristics(p.heuristics, p.preamble);
+  };
+  const inputs = ["", "\n", "\n\n", "# a comment\n", "# a\n\n# b\n", "\n# c\n\n"];
+  for (const input of inputs) {
+    const once = cycle(input);
+    assert.equal(cycle(once), once, `not a fixpoint for ${JSON.stringify(input)}`);
+  }
+  const commentOnly = cycle("# a comment\n");
+  assert.equal(commentOnly, "# a comment\n", "comments survive; blank lines do not");
+});

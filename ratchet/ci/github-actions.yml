@@ -53,6 +53,12 @@ jobs:
       - name: ratchet guard
         run: $RATCHET guard
 
+      # The secondary verifier: mutates synthetic state, fuzzes the CLI surface
+      # and the rules grammar against the oracle invariants. A fixed seed, so a
+      # failure reproduces locally with exactly this command.
+      - name: ratchet fuzz
+        run: $RATCHET fuzz --seed 20260907 --iterations 100
+
       # The signal. `if: always()` because a failed gate is exactly the case a
       # reviewer most needs the comment for.
       - name: Post the caught/new split

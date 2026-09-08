@@ -136,6 +136,11 @@ const ARGS = {
   guard: ["--quiet"],
   verify: ["--quiet"],
   hooks: ["status"],
+  // fuzz is self-contained — it builds its own scratch state and never reads
+  // the home — so probing it at its default budget would only measure its
+  // runtime against this instrument's spawn timeout, not its error paths.
+  // One rules iteration exercises the same machinery in a fraction of it.
+  fuzz: ["--iterations", "1", "--targets", "rules"],
 };
 
 /** Commands that would leave the scratch tree or the clock somewhere else. */
