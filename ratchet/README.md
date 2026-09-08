@@ -585,8 +585,8 @@ run — a flaky row reddens every future build — and it tells you when a
 heuristic passes at every commit in the range, which means either the history
 never had the problem or the heuristic is too weak to see it.
 
-`--every N` samples, `--setup "npm ci"` prepares each worktree, `--dry-run`
-reports without writing.
+`--every N` samples, `--setup "npm ci"` prepares each sampled commit before it
+is probed, `--dry-run` reports without writing.
 
 ## Editing a heuristic
 
@@ -685,13 +685,18 @@ leverage; each step names the section that details it.
    arbitrary computation; write it as `node {home}/tools/probe.js <subject>`
    and declare `owns` for the measuring scripts, or it cannot tell you when its
    instrument was edited (see "The frozen instrument" and "The owning rule").
-2. **Prove it before you trust it.** `ratchet adopt <subject> --good <ref>`
-   runs it across your history, captures the oldest commit where it fails, and
-   records the proof — one command. `ratchet validate <subject> --known-bad
-   <sha> --known-good <sha>` is the same protocol when you already know the
-   commit. A subject that passes through a known bug is too weak to watch
-   anything, and **`capture` refuses to store rows from an unproven subject**
-   (see "Validation is a gate, not a ritual").
+2. **Prove it before you trust it.** A subject that passes through a known bug
+   is too weak to watch anything, and **`capture` refuses to store rows from an
+   unproven subject**. Which of the two proofs applies is a fact about your
+   repository, not a preference. Your history contains the bug the heuristic is
+   about: `ratchet adopt <subject> --good <ref>` runs it across that history,
+   captures the oldest commit where it fails, and records the proof — one
+   command; `ratchet validate <subject> --known-bad <sha> --known-good <sha>`
+   is the same protocol when you already know the commit. It does not, because
+   the property has simply always held here — the normal case for a *quality*
+   number on a healthy codebase: declare `rejects <measure> <a value the rules
+   must refuse>`, and the subject enforces as a standing invariant with no
+   corpus row behind it (see "Two proofs that a check can fail").
 3. **Capture rides the same PR as the fix.** Point a fast-check reporter,
    JUnit XML, or TAP at `ratchet capture` on red CI runs and commit the new
    rows alongside the fix. Discrimination, the confirmation runs, and
@@ -1148,10 +1153,14 @@ windows, and that assumption is now per-window rather than per-range.
   A corpus row is a counterexample that must not fail again; a subject is a
   standing invariant, which has no counterexample while it holds. Both are
   the same check contract pointed at history.
-- `--setup "npm ci"` prepares each worktree. A setup failure is reported as
-  `na-env`, not as a failure: an old tree that today's toolchain can no
-  longer build is dependency rot, not a regression. The environment each run
-  happened under is recorded alongside the results.
+- `--setup "npm ci"` runs before **each commit** probed, not once per worktree.
+  Worktrees are pooled and reused, and a checkout leaves the previous commit's
+  untracked build output in place, so every commit has to be prepared again —
+  budget a setup line that reinstalls from scratch at once per sample, not once
+  per run. A setup failure is reported as `na-env`, not as a failure: an old
+  tree that today's toolchain can no longer build is dependency rot, not a
+  regression. The environment each run happened under is recorded alongside the
+  results.
 
 The honest limit: replay answers "does this commit pass today's checks under
 today's environment", not "what did this commit do at the time". Run it inside

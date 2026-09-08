@@ -111,12 +111,20 @@ Done. 27 minutes against the 10-minute target, written up as experiment 5 in
 (R37); a second (R38) turned up before the first heuristic was even written.
 Both closed. What it left open is small and specific:
 
-- **README step 5 does not fit a healthy repo.** The loop reads `ratchet adopt
-  <name> --good <an-old-ref>` as *the* step, and a team adopting a quality
-  heuristic on a green codebase has no bad commit to point at — `adopt` exits
-  1 with `no commits between HEAD and HEAD`. The `rejects` route is the one
-  that applies and is subordinated to a sub-clause of step 4. `init`'s own
-  template already lists both side by side; the step list should match it.
+- **README step 5 does not fit a healthy repo** — **closed 2026-09-08.** The
+  finding turned out to describe *two* step lists, not one. "Running against a
+  local repo" step 5 had already been fixed: it presents both routes as peers
+  and names the mis-step outright ("Reaching for `adopt` on a repo with no such
+  bug is the common first mis-step; it exits 1"). "The workflow" step 2 had
+  not, and that is the list billed as *the order of leverage* — it offered
+  `adopt --good <ref>` and `validate --known-bad <sha>`, both of which need a
+  known-bad commit, and never mentioned the `rejects` route at all. Rewritten
+  to carry both, in the same "a fact about your repository, not a preference"
+  framing the other list uses. The same step also carried a **dangling
+  cross-reference** — `(see "Validation is a gate, not a ritual")`, a section
+  that does not exist — now pointing at "Two proofs that a check can fail". A
+  sweep of every `(see "...")` in the README confirms the remaining seven all
+  resolve to real headings.
 - **The frozen-instrument warning fires on the natural layout.**
   `node tools/eval.js` from inside the repo it measures is how everyone writes
   it first, and the warning only bites once a *history* command runs. Correct,
@@ -159,7 +167,13 @@ without which test. The smallest fix is a vocabulary addition —
   and dispatch on a red row.
 - **Item 9** — per-commit artifact caching for replay (armed with numbers:
   3m44s for nine commits), and the worktree setup script every project still
-  hand-rolls.
+  hand-rolls. **Designed, not built:**
+  [DESIGN_ARTIFACT_CACHE.md](DESIGN_ARTIFACT_CACHE.md) works the problem and
+  recommends *against* the artifact store as a first move — the per-commit cost
+  is setup re-run inside a reused worktree, not a cold install, and the cache
+  as usually imagined is a deliberate policy of checking a commit out without
+  preparing it, which is the v0.8 `adopt` defect made systematic. Three staged
+  options there, cheapest first.
 - **Vocabulary residue** — a baseline that moves, repeated structure
   (`for each`), two-sided readings across two runs.
 - **The fifth coverage class** — packaging and hygiene (R16, R19, R21) still

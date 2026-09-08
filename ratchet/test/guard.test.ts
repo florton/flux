@@ -580,6 +580,10 @@ test("an instrument inside the measured tree is a warning, and a token silences 
   const frozen = r.steps.find((s) => s.name === "frozen instrument")!;
   assert.equal(frozen.severity, "warning");
   assert.match(frozen.detail, /check\.js, which is inside that tree/);
+  // Not a git repo, so `tracked` takes its milder default and this is the
+  // tracked wording. It has to say *when* it bites: the reader meets this
+  // warning on day one, and it costs them nothing until a history command runs.
+  assert.match(frozen.detail, /Silent at HEAD — it bites only under replay, adopt, bisect and validate/);
   assert.match(frozen.detail, /fix: .*\{home\}\/check\.js/);
 
   fs.mkdirSync(path.join(p.home, "tools"), { recursive: true });

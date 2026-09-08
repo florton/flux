@@ -192,7 +192,8 @@ export function instrumentsInsideTree(cwd: string, config: RatchetConfig): Instr
         tracked,
         detail: tracked
           ? `"${subject}" measures the tree through ${relative}, which is inside that tree: ` +
-            `across history it runs each commit's own copy of the instrument, so the readings are not comparable`
+            `across history it runs each commit's own copy of the instrument, so the readings are not comparable. ` +
+            `Silent at HEAD — it bites only under replay, adopt, bisect and validate`
           : `"${subject}" measures the tree through ${relative}, which is inside that tree and untracked: ` +
             `in a worktree the file is simply absent, so replay, adopt, bisect and validate cannot run it at all`,
         fix:
