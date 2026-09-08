@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { capture } from "../src/capture";
+import { accept } from "../src/accept";
 import { guard, formatGuard } from "../src/guard";
 import { foldRows, readEvents, rowId } from "../src/corpus";
 import { readJournal } from "../src/journal";
@@ -249,6 +250,36 @@ test("guard reports corpus corruption as an error", async () => {
   assert.equal(r.steps.find((s) => s.name === "integrity")!.ok, false);
 });
 
+test("a config that will not load is one refusal, not the same paragraph twice", () => {
+  // R39. `fsck` and `verify` each rediscovered the malformed config and each
+  // printed the whole message, so `guard failed: integrity, rows` arrived with
+  // one cause stated twice. A config that will not load is the same class of
+  // failure as a rules file that will not parse — every subject in it has
+  // stopped enforcing — so it is refused where that one is, and once.
+  const p = project();
+  fs.writeFileSync(
+    path.join(p.home, "config.json"),
+    JSON.stringify({ subjects: { s: { command: NODE + " check.js" } } }),
+    "utf8"
+  );
+  return guard(p.root, { ratchetHome: p.home }).then((r) => {
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.steps.map((s) => s.name), ["subjects"], "nothing else runs without subjects");
+    assert.match(r.steps[0].detail, /subjects\."s"\.check is missing/);
+    assert.match(r.steps[0].detail, /has "command", which nothing reads/);
+    assert.doesNotMatch(r.steps[0].detail, /is not iterable/);
+    assert.match(formatGuard(r), /guard failed: subjects/);
+  });
+});
+
+test("a well-formed config adds no subjects step", async () => {
+  // The control: the step exists only when there is something to say.
+  const p = project();
+  proveSubjects(p.home, p.root);
+  const r = await guard(p.root, { ratchetHome: p.home });
+  assert.equal(r.steps.some((s) => s.name === "subjects"), false);
+});
+
 /* -------------------------------------------------------------------------- */
 /* Standing invariants — enforcing with no row behind them                     */
 /* -------------------------------------------------------------------------- */
@@ -384,6 +415,160 @@ test("a repository that declares subjects and has armed none of them says so", a
 test("an empty home with no subjects at all warns about nothing", () => {
   assert.equal(emptyGateWarning([], 0), undefined, "a freshly initialized home is not a finding");
   assert.match(emptyGateWarning([], 3)!, /declares 3 subject/);
+});
+
+/**
+ * Two scripted subjects, one to be armed with a row and one not, plus a state
+ * file so the same check can fail (to arm a row) and then pass (so the gate is
+ * green afterwards, which is the situation R31 is about). Each check leaves a
+ * mark next to itself when it runs.
+ *
+ * The mark is the point. A claim about what the gate *runs* cannot be tested
+ * against the gate's own bookkeeping without assuming the thing in question —
+ * R31 survived four versions precisely because every number `guard` printed
+ * was true. A file on disk is a fact outside that loop.
+ */
+function twoSubjects(): { home: string; root: string; cap: string; fix: () => void } {
+  const home = tmpDir();
+  const root = path.join(home, "proj");
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(
+    path.join(home, "config.json"),
+    JSON.stringify({
+      subjects: {
+        armed: { check: NODE + " mark.js armed 5", captureProperty: "p" },
+        bare: { check: NODE + " mark.js bare 7", captureProperty: "q" },
+      },
+    }),
+    "utf8"
+  );
+  fs.writeFileSync(path.join(home, "corpus.jsonl"), "", "utf8");
+  fs.writeFileSync(path.join(home, "journal.jsonl"), "", "utf8");
+  fs.writeFileSync(
+    path.join(root, "mark.js"),
+    'const fs=require("fs"),p=require("path");' +
+      'fs.writeFileSync(p.join(__dirname,process.argv[2]+".mark"),"ran");' +
+      'let raw="";try{raw=fs.readFileSync(0,"utf8");}catch(e){}' +
+      'const bad=fs.readFileSync(p.join(__dirname,"state.txt"),"utf8").trim()==="bad";' +
+      'if(bad&&raw.trim()===process.argv[3]){console.log(process.argv[2]+" is wrong");process.exit(1);}' +
+      "process.exit(0);",
+    "utf8"
+  );
+  fs.writeFileSync(path.join(root, "state.txt"), "bad", "utf8");
+  const cap = path.join(root, "cap.json");
+  fs.writeFileSync(cap, JSON.stringify([{ property: "p", counterexample: [5] }]), "utf8");
+  // Arming runs the checks; clear the marks so the next run's marks are its own.
+  const fix = (): void => {
+    fs.writeFileSync(path.join(root, "state.txt"), "good", "utf8");
+    for (const f of fs.readdirSync(root)) if (f.endsWith(".mark")) fs.rmSync(path.join(root, f));
+  };
+  return { home, root, cap, fix };
+}
+
+const ranMark = (root: string, name: string): boolean => fs.existsSync(path.join(root, name + ".mark"));
+
+const bothCounterexamples = (cap: string): void =>
+  fs.writeFileSync(
+    cap,
+    JSON.stringify([
+      { property: "p", counterexample: [5] },
+      { property: "q", counterexample: [7] },
+    ]),
+    "utf8"
+  );
+
+test("a subject with no row and no declared rejection is named as run by nothing", async () => {
+  // R31. `verify` enforces active rows *union* standing invariants, so a
+  // subject in neither is declared, configured, counted by `validation` as
+  // proven — and never executed. Every line the gate printed was accurate on
+  // its own terms and the whole was misleading.
+  const p = twoSubjects();
+  proveSubjects(p.home, p.root);
+  withHome(p.home, () => capture(p.root, [p.cap]));
+  p.fix();
+  const r = await guard(p.root, { ratchetHome: p.home });
+
+  assert.equal(r.steps.find((s) => s.name === "rows")!.ok, true, "the armed row passes");
+  assert.ok(ranMark(p.root, "armed"), "the armed subject ran");
+  assert.ok(!ranMark(p.root, "bare"), "nothing ran the bare subject");
+
+  const unrun = r.steps.find((s) => s.name === "unrun subjects");
+  assert.ok(unrun, "the gate must say so out loud");
+  assert.equal(unrun.severity, "warning");
+  assert.match(unrun.detail, /nothing runs 1 of 2 declared subject\(s\): bare/);
+  assert.equal(r.ok, true, "a subject between rows is not a failing build");
+
+  // Advice a scripted subject can actually take: it has no rules block, so it
+  // cannot declare a rejection, and saying otherwise is how warnings stop
+  // being read.
+  assert.match(unrun.detail, /bare declared in config\.json/);
+  assert.doesNotMatch(unrun.detail, /in the rules: rejects/);
+
+  // And the line that used to mislead now carries the qualifier.
+  const validation = r.steps.find((s) => s.name === "validation");
+  assert.ok(validation);
+  assert.match(validation.detail, /bare \(nothing runs it\)/);
+  assert.doesNotMatch(validation.detail, /armed \(nothing runs it\)/);
+});
+
+test("arming the second subject silences the warning, and it starts running", async () => {
+  const p = twoSubjects();
+  proveSubjects(p.home, p.root);
+  bothCounterexamples(p.cap);
+  withHome(p.home, () => capture(p.root, [p.cap]));
+  p.fix();
+  const r = await guard(p.root, { ratchetHome: p.home });
+
+  assert.ok(ranMark(p.root, "bare"), "the second subject now runs");
+  assert.equal(r.steps.find((s) => s.name === "unrun subjects"), undefined);
+  const validation = r.steps.find((s) => s.name === "validation");
+  assert.ok(validation);
+  assert.doesNotMatch(validation.detail, /nothing runs it/);
+});
+
+test("archiving a subject's last row brings the warning back", async () => {
+  // The silent path R31 named: arm a subject, later retire its last row, keep
+  // the history proof. From then on nothing runs it, and until now the gate
+  // went on naming it as proven.
+  const p = twoSubjects();
+  proveSubjects(p.home, p.root);
+  bothCounterexamples(p.cap);
+  withHome(p.home, () => capture(p.root, [p.cap]));
+  const bare = rows(p.home).find((row) => row.subject === "bare");
+  assert.ok(bare, "the second subject was armed");
+  withHome(p.home, () => accept(p.root, bare.id, "no longer a concern", "test"));
+  p.fix();
+
+  const r = await guard(p.root, { ratchetHome: p.home });
+  assert.ok(!ranMark(p.root, "bare"), "the retired subject is not run by anything");
+  const unrun = r.steps.find((s) => s.name === "unrun subjects");
+  assert.ok(unrun, "retiring the last row must not be silent");
+  assert.match(unrun.detail, /nothing runs 1 of 2 declared subject\(s\): bare/);
+});
+
+test("an unrun prose subject is offered the rejects route instead", async () => {
+  // A prose heuristic with no rows and no `rejects` clause is equally unrun,
+  // and unlike a scripted subject it can fix that in the rules file.
+  const p = project("heuristic h\n  run node x.js\n  measure n the exit code\n  rule n is 0\n");
+  proveSubjects(p.home, p.root);
+  withHome(p.home, () => capture(p.root, [p.cap]));
+  const r = await guard(p.root, { ratchetHome: p.home });
+  const unrun = r.steps.find((s) => s.name === "unrun subjects");
+  assert.ok(unrun);
+  assert.match(unrun.detail, /nothing runs 1 of 2 declared subject\(s\): h/);
+  assert.match(unrun.detail, /in the rules: rejects <measure>/);
+  assert.doesNotMatch(unrun.detail, /config\.json/);
+});
+
+test("the empty-gate warning is not doubled by the unrun one", async () => {
+  // When nothing is armed at all, `coverage` already says nothing was
+  // checked. Two warnings for one situation is how a gate teaches people to
+  // skim it.
+  const p = twoSubjects();
+  proveSubjects(p.home, p.root);
+  const r = await guard(p.root, { ratchetHome: p.home });
+  assert.ok(r.steps.find((s) => s.name === "coverage"), "the empty gate still warns");
+  assert.equal(r.steps.find((s) => s.name === "unrun subjects"), undefined);
 });
 
 test("an instrument inside the measured tree is a warning, and a token silences it", async () => {

@@ -10,6 +10,7 @@ import type { CorpusEvent, LineProblem, RatchetConfig } from "./types";
 export interface FsckFinding {
   kind:
     | "corpus-unreadable-line"
+    | "subjects-unreadable"
     | "journal-unreadable-line"
     | "orphan-event"
     | "id-mismatch"
@@ -107,7 +108,10 @@ export function fsck(ratchetDir: string, projectRoot?: string): FsckReport {
         push("instrument-inside-tree", "warning", `${f.detail}. Fix: ${f.fix}`);
       }
     } catch (err) {
-      push("corpus-unreadable-line", "error", err instanceof Error ? err.message : String(err));
+      // Not the corpus: this is config.json or heuristics.rules failing to
+      // load. Naming the corpus here sends a reader to the one file that is
+      // fine, which is how a finding costs more time than it saves.
+      push("subjects-unreadable", "error", err instanceof Error ? err.message : String(err));
     }
   }
 

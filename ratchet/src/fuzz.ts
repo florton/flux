@@ -494,7 +494,7 @@ export interface CorpusOpData {
 }
 
 export interface ConfigOpData {
-  kind: "junk" | "no-subjects" | "empty-check";
+  kind: "junk" | "no-subjects" | "empty-check" | "no-check" | "owns-string" | "subject-scalar";
   text: string;
 }
 
@@ -539,8 +539,33 @@ function corpusOp(rng: Rng): StateOp {
   return { kind: "corpus", op: { kind, pick: rng.int(20), text } };
 }
 
+/**
+ * Config shapes people actually write by mistake.
+ *
+ * `empty-check` was already here before R39 and no oracle could see it: a
+ * subject that cannot run produced `0/0 rows pass` and violated nothing. The
+ * rest are the shapes that entry found — a subject keyed `command`, `owns`
+ * written as a bare string, a subject that is a scalar. They are generated as
+ * a set now that a malformed subject is refused at load, so the refusal stays
+ * a first-class message rather than drifting back into a TypeError.
+ */
+const CONFIG_SHAPES: Record<Exclude<ConfigOpData["kind"], "junk">, string> = {
+  "no-subjects": '{"subjects":{}}\n',
+  "empty-check": '{"subjects":{"stub":{"check":"","owns":[".ratchet/tools/owned.txt"]}}}\n',
+  "no-check": '{"subjects":{"stub":{"command":"node tools/check.js"}}}\n',
+  "owns-string": '{"subjects":{"stub":{"check":"node tools/check.js","owns":".ratchet/tools/owned.txt"}}}\n',
+  "subject-scalar": '{"subjects":{"stub":"node tools/check.js"}}\n',
+};
+
 function configOp(rng: Rng): StateOp {
-  const kind = rng.pick(["junk", "no-subjects", "empty-check"] as const);
+  const kind = rng.pick([
+    "junk",
+    "no-subjects",
+    "empty-check",
+    "no-check",
+    "owns-string",
+    "subject-scalar",
+  ] as const);
   return { kind: "config", op: { kind, text: kind === "junk" ? junk(rng, 30) : "" } };
 }
 
@@ -638,9 +663,7 @@ export function applyStateOps(seed: Record<string, string>, ops: StateOp[]): Rec
       files[op.file] = applyTextOp(files[op.file] ?? "", op.op);
     } else if (op.kind === "config") {
       files[".ratchet/config.json"] =
-        op.op.kind === "junk" ? op.op.text
-        : op.op.kind === "no-subjects" ? '{"subjects":{}}\n'
-        : '{"subjects":{"stub":{"check":"","owns":[".ratchet/tools/owned.txt"]}}}\n';
+        op.op.kind === "junk" ? op.op.text : CONFIG_SHAPES[op.op.kind];
     } else {
       files[".ratchet/corpus.jsonl"] = applyCorpusOp(files[".ratchet/corpus.jsonl"] ?? "", op.op);
     }

@@ -29,7 +29,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { loadSubjects } from "./paths";
-import { loadHeuristics, formatProblems } from "./heuristic-config";
+import { loadHeuristics, formatProblems, type MergedConfig } from "./heuristic-config";
 import { formatHeuristics } from "./heuristics";
 import { fsck } from "./fsck";
 import { instrumentsInsideTree } from "./instrument";
@@ -84,6 +84,19 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
         ? `${path.basename(loaded.file)} is not in canonical form — run \`ratchet fmt\` so the committed clauses are the checked clauses`
         : `${loaded.heuristics.length} heuristic(s), canonical`
     );
+  }
+
+  // The subjects themselves: config.json parseable, and every subject a shape
+  // that can actually be run. This is the same class of failure as a rules
+  // file that will not parse — every subject in it has stopped enforcing — so
+  // it is refused here, once, rather than left for `fsck` and `verify` to
+  // rediscover separately and print the same paragraph twice.
+  let config: MergedConfig;
+  try {
+    config = loadSubjects(opts.ratchetHome);
+  } catch (err) {
+    add("subjects", false, "error", err instanceof Error ? err.message : String(err));
+    return { ok: false, steps, results: [] };
   }
 
   // 2. Corpus and journal integrity.
@@ -162,13 +175,51 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
 
   // Green over nothing, shape one: a repository that declares subjects and
   // has armed none of them.
-  const empty = emptyGateWarning(results, Object.keys(loadSubjects(opts.ratchetHome).subjects).length);
+  const empty = emptyGateWarning(results, Object.keys(config.subjects).length);
   if (empty) add("coverage", false, "warning", empty);
+
+  // The partial form of shape one, and the one that actually hid. A gate can
+  // arm some subjects and leave others running nothing at all: `verify`
+  // enforces active rows *union* standing invariants, so a subject in neither
+  // set is declared, configured, counted by `validation` as proven — and
+  // never executed once. It hid a real subject in this tool's own repository
+  // for four versions, and every green it printed was true on its own terms.
+  //
+  // Read off what `verify` actually ran rather than re-deriving its selection
+  // rule here, so the two cannot drift apart: a subject nothing reports on is
+  // a subject nothing ran. A warning, not a failure — a subject can be
+  // legitimately between rows, and the honest thing to say is what is true.
+  const ran = new Set(results.map((r) => r.subject));
+  const unrun = Object.keys(config.subjects).filter((n) => !ran.has(n)).sort();
+  if (unrun.length > 0 && !empty) {
+    const unrunProse = unrun.filter((n) => config.fromRules.has(n));
+    const scripted = unrun.filter((n) => !config.fromRules.has(n));
+    // Same discipline as the validation advice below: `rejects` is a clause in
+    // the rules file, so it is only on offer to a subject that has a block
+    // there. Telling a scripted subject to add one is advice it cannot take.
+    const how = [`  arm one against your own history:  ratchet adopt ${unrun[0]} --good <an-old-ref>`];
+    if (unrunProse.length > 0) {
+      const who = unrunProse.length === unrun.length ? "" : ` for ${unrunProse.join(", ")}`;
+      how.push(`  or enforce it with no row${who}, in the rules: rejects <measure> <a value the rules must refuse>`);
+    }
+    if (scripted.length > 0) {
+      how.push(
+        `  ${scripted.join(", ")} declared in config.json, with no rules block to declare a rejection in:` +
+          ` to enforce without a row, re-spell as a heuristic with a run line`
+      );
+    }
+    add(
+      "unrun subjects",
+      false,
+      "warning",
+      [`nothing runs ${unrun.length} of ${Object.keys(config.subjects).length} declared subject(s): ${unrun.join(", ")}`, ...how].join("\n")
+    );
+  }
 
   // Shape two: an instrument that lives inside the tree it measures. Correct
   // at HEAD, wrong under every history command — so it is exactly the kind of
   // thing a gate has to say out loud, because nothing else ever will.
-  const inside = instrumentsInsideTree(cwd, loadSubjects(opts.ratchetHome));
+  const inside = instrumentsInsideTree(cwd, config);
   if (inside.length > 0) {
     add(
       "frozen instrument",
@@ -200,14 +251,20 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
   // have only the weaker proof must be able to see it at a glance, because
   // the entire argument for the capture gate was that "validated once" must
   // never quietly mean "trusted forever".
-  const config = loadSubjects(opts.ratchetHome);
   const proofs = subjectProofs(cwd, opts.ratchetHome, config);
   const byTier = (t: ProofTier): string[] =>
     [...proofs.values()].filter((p) => p.tier === t).map((p) => p.subject).sort();
   const unproven = byTier("none");
+  // A proof is not a promise that anything runs it. Naming an unrun subject
+  // here with no qualifier is the false green R31 recorded: the reader takes
+  // "validated against history" to mean the check is standing guard, when it
+  // means only that it once could have.
+  const unrunSet = new Set(unrun);
+  const named = (t: ProofTier): string =>
+    byTier(t).map((n) => (unrunSet.has(n) ? `${n} (nothing runs it)` : n)).join(", ");
   const proofLines = (["history", "declared"] as const)
     .filter((t) => byTier(t).length > 0)
-    .map((t) => `  ${byTier(t).length} ${PROOF_LABEL[t]}: ${byTier(t).join(", ")}`);
+    .map((t) => `  ${byTier(t).length} ${PROOF_LABEL[t]}: ${named(t)}`);
   const validated = new Set([...proofs.values()].filter((p) => p.tier !== "none").map((p) => p.subject));
   // `rejects` is a clause in the rules file, so it is only on offer to a
   // subject that has a block there. A subject declared in config.json has no

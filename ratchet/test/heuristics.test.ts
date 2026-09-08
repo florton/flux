@@ -744,6 +744,104 @@ test("loadSubjects explains a config.json that is not valid JSON", () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Subject shape — R39                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** A config.json holding exactly one subject, whatever shape it is given. */
+function withSubject(subject: unknown): string {
+  const p = project(`heuristic h\n  run x\n  measure e the exit code\n  rule e is 0\n`);
+  fs.writeFileSync(path.join(p.home, "config.json"), JSON.stringify({ subjects: { s: subject } }), "utf8");
+  return p.home;
+}
+
+test("every malformed subject shape is refused by name, not by TypeError", () => {
+  // `check: string` is a promise the type system makes and JSON does not keep.
+  // Each of these reached the spawn site or the hasher and died there: the
+  // first four as `TypeError: command is not iterable`, and under `validate`
+  // that crash was reported as the check *failing as required*, because an
+  // instrument that cannot run fails everywhere.
+  const cases: [string, unknown, RegExp][] = [
+    ["no check", { command: "node x.js" }, /subjects\."s"\.check is missing/],
+    ["null check", { check: null }, /subjects\."s"\.check is null/],
+    ["numeric check", { check: 42 }, /subjects\."s"\.check is 42/],
+    ["array check", { check: ["node", "x.js"] }, /subjects\."s"\.check is an array/],
+    ["blank check", { check: "   " }, /subjects\."s"\.check is blank/],
+    ["subject is a string", "node x.js", /subjects\."s" is a string; a subject is an object/],
+    ["subject is null", null, /subjects\."s" is null/],
+    ["owns is a string", { check: "x", owns: ".ratchet/t.js" }, /owns is a string; it must be an array/],
+    ["owns holds a number", { check: "x", owns: ["a", 2] }, /owns\[1\] is 2/],
+    ["owns holds a blank", { check: "x", owns: [" "] }, /owns\[0\] is blank/],
+    ["timeoutMs is a string", { check: "x", timeoutMs: "soon" }, /timeoutMs is a string/],
+    ["timeoutMs is zero", { check: "x", timeoutMs: 0 }, /timeoutMs is 0/],
+    ["shell is a string", { check: "x", shell: "yes" }, /shell is a string; it must be true or false/],
+    ["captureProperty is a number", { check: "x", captureProperty: 1 }, /captureProperty is 1/],
+  ];
+  for (const [label, subject, expected] of cases) {
+    const home = withSubject(subject);
+    assert.throws(() => loadSubjects(home), expected, label);
+    let message = "";
+    try {
+      loadSubjects(home);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    // Never the internal message, and never without the file that holds it.
+    assert.match(message, /config\.json/, label);
+    assert.doesNotMatch(message, /is not iterable|Cannot read properties/, label);
+  }
+});
+
+test("a near-miss key is named, because that is the whole search", () => {
+  // The typo that found this: `command` reads as the obvious name for the
+  // thing, and nothing read it.
+  assert.throws(() => loadSubjects(withSubject({ command: "node x.js" })), /has "command", which nothing reads/);
+  assert.throws(() => loadSubjects(withSubject({ run: "node x.js" })), /has "run", which nothing reads/);
+  assert.throws(
+    () => loadSubjects(withSubject({ cmd: "a", script: "b" })),
+    /has "cmd" and "script", which nothing reads/
+  );
+});
+
+test("every problem in a config is reported at once, not one per run", () => {
+  const p = project(`heuristic h\n  run x\n  measure e the exit code\n  rule e is 0\n`);
+  fs.writeFileSync(
+    path.join(p.home, "config.json"),
+    JSON.stringify({ subjects: { a: { check: 1 }, b: { check: "x", owns: 2 }, c: null } }),
+    "utf8"
+  );
+  try {
+    loadSubjects(p.home);
+    assert.fail("a config with three bad subjects must not load");
+  } catch (err) {
+    const m = (err as Error).message;
+    assert.match(m, /3 problems in/);
+    for (const name of ["a", "b", "c"]) assert.match(m, new RegExp(`subjects\."${name}"`));
+  }
+});
+
+test("a well-formed subject with every optional key still loads", () => {
+  // The control. A validator that refuses valid configs is worse than none.
+  const home = withSubject({
+    check: "node check.js",
+    owns: [".ratchet/tools/check.js"],
+    timeoutMs: 1000,
+    shell: false,
+    captureProperty: "p",
+  });
+  const config = loadSubjects(home);
+  assert.equal(config.subjects.s.check, "node check.js");
+  assert.deepEqual(config.subjects.s.owns, [".ratchet/tools/check.js"]);
+  // And absent optionals are not a problem.
+  assert.equal(loadSubjects(withSubject({ check: "node check.js" })).subjects.s.timeoutMs, undefined);
+});
+
+test("subjects given as an array is a top-level error, not fourteen subject errors", () => {
+  const p = project(`heuristic h\n  run x\n  measure e the exit code\n  rule e is 0\n`);
+  fs.writeFileSync(path.join(p.home, "config.json"), JSON.stringify({ subjects: [] }), "utf8");
+  assert.throws(() => loadSubjects(p.home), /needs a top-level "subjects" object/);
+});
+
+/* -------------------------------------------------------------------------- */
 /* fmt                                                                         */
 /* -------------------------------------------------------------------------- */
 

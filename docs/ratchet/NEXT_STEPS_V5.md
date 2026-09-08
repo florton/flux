@@ -6,6 +6,17 @@
 > [../../ratchet/README.md](../../ratchet/README.md); what is broken or open is in
 > [OUTSTANDING_RATCHET.md](OUTSTANDING_RATCHET.md).
 
+> **Update, 2026-09-08 — item 1 is done, it found R39, and the tool is v0.10.**
+> The last false green in the gate is closed: a subject with no active row and
+> no declared rejection was counted as proven and never executed, and `guard`
+> now names it. Building that reproduction meant writing a config by hand, and
+> a one-word typo — `command` for `check` — turned out to reach the spawn site
+> as `TypeError: command is not iterable`, which `validate` then reported as
+> the check *failing as required*. Both closed, each reproduced by execution
+> and each part reverted on its own to prove its tests are not vacuous. The
+> accounts are [R31 and R39](OUTSTANDING_RATCHET.md). Two entries remain open,
+> both low (R32, R33), and neither is a false green. 237 tests.
+
 > **Update, 2026-09-07 (later) — item 3 is done, and it found R37.** The blind
 > DX test ran against a throwaway ranking repo and hit a **false green** on the
 > first heuristic written: a bound written in ordinary English was checked as a
@@ -57,20 +68,32 @@ the new command's error path is covered without measuring its runtime.
 
 ## Next pieces, in priority order
 
-### 1. Close R31 — the gate affirms a subject that nothing runs
+### 1. Close R31 — the gate affirms a subject that nothing runs — **done**
 
-The one remaining false green: a *scripted* subject with zero active rows is
-never run by anything, and `guard`'s validation line names it as proven
-anyway. `ratchet yield` shows it; nothing at the gate consults it.
+Closed, and shipped as v0.10. `guard` grew an `unrun subjects` step: every
+declared subject that no mechanism will run, named and worded as what is true —
+*nothing runs this* — with advice each kind of subject can actually take, and
+the proof line now carries `(nothing runs it)` beside the name it used to
+affirm without qualification.
 
-**Shape of the fix.** A `guard` step that reports subjects which no mechanism
-will run — scripted, zero active rows, not a standing invariant. A warning,
-not a failure: a subject can be legitimately between rows. It belongs in the
-same list as the frozen-instrument warning, worded as what is true: *nothing
-runs this*. The harder half is the design question R29 side-stepped: whether a
-scripted subject should be able to declare a rejection at all, or whether
-"a standing property, checked by a script" should always be spelled as a prose
-heuristic with a `run` line, as this repository now does everywhere.
+The one design choice worth recording: the set is read off **what `verify`
+actually ran**, not re-derived from its selection rule. Restating "active rows
+union standing invariants" in a second place is how a gate and the thing it
+describes drift apart — the general shape of most of the defects in
+[OUTSTANDING_RATCHET.md](OUTSTANDING_RATCHET.md) — so a subject nothing
+reports on is a subject nothing ran, with no second copy of the rule to fall
+behind.
+
+Reproduced and re-run by execution against a scratch project whose checks leave
+marks on disk, with the arm and archive controls both driven; five regression
+tests, three of which fail against the unfixed gate. The account is
+[R31](OUTSTANDING_RATCHET.md). 229 tests.
+
+**Still open, and not a defect:** the design question K5 raised — whether a
+scripted subject should be able to declare a rejection at all, or whether "a
+standing property, checked by a script" should always be spelled as a prose
+heuristic with a `run` line, as this repository now does everywhere. The
+warning makes the choice visible at the moment it matters; it does not make it.
 
 ### 2. The semgrep pass (the selling-point half of the checklist)
 

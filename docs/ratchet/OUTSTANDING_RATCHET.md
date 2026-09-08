@@ -1,6 +1,6 @@
 # Ratchet — what is still outstanding
 
-Recorded 2026-09-07, after every entry in [ISSUES_RATCHET.md](ISSUES_RATCHET.md)
+Recorded 2026-09-07 and updated 2026-09-08, after every entry in [ISSUES_RATCHET.md](ISSUES_RATCHET.md)
 (R1–R21) and [ISSUES_RATCHET_V09.md](ISSUES_RATCHET_V09.md) (R22–R27) was closed.
 Numbering continues from those, so an entry can be cited across all three files.
 
@@ -10,19 +10,24 @@ and no measurement appears here that was not taken. Where something was *not*
 measured, the entry says so in those words.
 
 **Summary.** Five defects were found and fixed on the day this file was
-written; three remain open, one of them a false-green in the gate itself. The
-newest, R37, is the most serious the tool has had: a bound written the way
-people write bounds was checked as a string comparison, in one direction
-failing forever and in the other **passing** forever with the gate reporting
-green. The rest of the file is the things that were never defects — costs
-accepted on purpose, plan work not built, and decisions waiting on a human.
+written. The day after, R31 — the last false green in the gate itself — was
+closed, and building its reproduction turned up R39, where a config typo
+reached the spawn site as an internal TypeError that `validate` read as the
+check working. Both shipped as v0.10. Two entries remain open, both low: a
+witness that names the count rather than the cause, and a floor that counts
+helper modules as tests. The most serious the tool has had is R37: a bound
+written the way people write bounds was checked as a string comparison, in one
+direction failing forever and in the other **passing** forever with the gate
+reporting green. The rest of the file is the things that were never defects —
+costs accepted on purpose, plan work not built, and decisions waiting on a
+human.
 
 | # | Severity | Status | Issue |
 |---|---|---|---|
 | R28 | **high** | **closed** | Two wall-clock concurrency assertions flake under load, and the suite is this repo's own standing invariant — so the gate failed about one run in three on an untouched tree |
 | R29 | medium | **closed** | `visual-diff-is-sound` was a scripted subject with no rows, so nothing ever ran it; the visual comparator was ungated |
 | R30 | low | **closed** | The frozen-instrument detector skipped *every* command run by a shell, not just the `-c` form (the narrowing R24 left in place) |
-| R31 | **medium** | **open** | A scripted subject with no rows is never run, and the gate affirms it by name anyway |
+| R31 | medium | **closed** | A subject with no active row and no declared rejection is never run, and the gate affirmed it by name anyway |
 | R32 | low | **open** | A rule-failure witness names the count, not the cause: "failing measured 1" without which test |
 | R33 | low | **open** | The `passing` floor counts non-test helper modules as tests |
 | R34 | medium | **closed** | `ratchet pr-comment --json` printed markdown with exit 0 — found by `ratchet fuzz` |
@@ -30,6 +35,7 @@ accepted on purpose, plan work not built, and decisions waiting on a human.
 | R36 | low | **closed** | `fmt` grew a blank line into an empty or comment-only rules file on every run — found by `ratchet fuzz` |
 | R37 | **high** | **closed** | `latency is not above 100` was an inequality against the *text* "above 100" — always true, so the gate went green over a ceiling exceeded 2000x — found by the blind DX test |
 | R38 | low | **closed** | A brand-new `ratchet init` produced a `guard` warning about its own scaffolding: the R36 fix dropped every preamble blank, and the shipped template has one |
+| R39 | medium | **closed** | A subject keyed `command` instead of `check` reached the spawn site as `TypeError: command is not iterable`, and `validate` reported that crash as the check *failing as required*; `owns` as a bare string sent the hasher walking the filesystem |
 
 ---
 
@@ -219,7 +225,7 @@ narrowing as it is.
 
 ---
 
-## R31 — medium — **open** — a subject nothing runs, affirmed by name
+## R31 — medium — a subject nothing runs, affirmed by name — **closed**
 
 R29 fixed one instance. The mechanism that hid it is untouched, and it is a
 false green rather than a missing warning.
@@ -262,6 +268,110 @@ K5 raised and R29 side-stepped: whether a scripted subject should be able to
 declare a rejection at all, or whether "a standing property, checked by a
 script" should always be spelled as a prose heuristic with a `run` line, as it
 now is here.
+
+**The fix, and what it is derived from.** A `guard` step named `unrun subjects`
+reports every declared subject that no mechanism will run, worded as what is
+true: *nothing runs this*. A warning, not a failure — the reason stated above
+still holds, and `--strict` does not promote it, because `--strict` is about
+subjects with no proof and an unrun subject may be perfectly well proven.
+
+The set is read off **what `verify` actually ran**, not re-derived from its
+selection rule:
+
+```ts
+const ran = new Set(results.map((r) => r.subject));
+const unrun = Object.keys(config.subjects).filter((n) => !ran.has(n)).sort();
+```
+
+That choice is the point. Restating "active rows union standing invariants" in
+a second place is how the gate and the thing it describes drift apart, which is
+the general shape of every defect in this file. A subject nothing reports on is
+a subject nothing ran, and there is no second copy of the rule to fall behind.
+
+Two smaller pieces came with it. The advice follows the discipline the
+validation step already had: `rejects` is a clause in the rules file, so it is
+offered only to a subject that has a block there, and a subject from
+`config.json` is instead told the route R29 took — re-spell it as a heuristic
+with a `run` line. And the proof listing, the line that did the affirming, now
+carries the qualifier beside the name:
+
+```
+✓ validation           all 2 subject(s) have a proof they can fail
+    2 validated against history: has-a-row, has-no-row (nothing runs it)
+```
+
+The warning is suppressed when the empty-gate warning already covers the same
+situation. Two warnings for one cause is how a gate teaches people to skim it,
+which is R38's lesson.
+
+**Reproduced, and fixed, by execution.** The scratch project this entry opened
+with, rebuilt: two scripted subjects, one armed by `adopt` and one not, both
+proven against history by `ratchet validate`, with each check writing a mark to
+disk when it runs. Before:
+
+```
+✓ rows                 1/1 rows pass
+✓ validation           all 2 subject(s) have a proof they can fail
+    2 validated against history: has-a-row, has-no-row
+guard passed
+
+$ ls marks/
+has-a-row
+```
+
+After:
+
+```
+! unrun subjects       nothing runs 1 of 2 declared subject(s): has-no-row
+    arm one against your own history:  ratchet adopt has-no-row --good <an-old-ref>
+    has-no-row declared in config.json, with no rules block to declare a
+    rejection in: to enforce without a row, re-spell as a heuristic with a run line
+✓ validation           all 2 subject(s) have a proof they can fail
+    2 validated against history: has-a-row, has-no-row (nothing runs it)
+guard passed with 2 warning(s)
+
+$ ls marks/
+has-a-row
+```
+
+Then the two controls, on the same project. Arming `has-no-row` with `adopt`
+silences the warning and the mark appears, so the warning tracks the fact
+rather than a proxy for it. Retiring that row again with `ratchet accept` —
+the silent path this entry named, *arms a subject, later archives its last row,
+keeps the history proof* — brings the warning back:
+
+```
+✓ rows                 1/1 rows pass
+! unrun subjects       nothing runs 1 of 2 declared subject(s): has-no-row
+    2 validated against history: has-a-row, has-no-row (nothing runs it)
+```
+
+**Five regression tests**, in `test/guard.test.ts`. Each check leaves a mark on
+disk, because a claim about what the gate *runs* cannot be tested against the
+gate's own bookkeeping without assuming the thing in question — this defect
+survived four versions precisely because every number `guard` printed was true.
+Three of the five fail against the unfixed `guard` with the messages they were
+written for; the other two are the controls, which must pass in both directions
+or the gate has merely learned to warn about everything:
+
+```
+not ok - a subject with no row and no declared rejection is named as run by nothing
+  error: 'the gate must say so out loud'
+not ok - archiving a subject's last row brings the warning back
+  error: 'retiring the last row must not be silent'
+not ok - an unrun prose subject is offered the rejects route instead
+```
+
+229 tests. This repository's own gate has no unrun subjects — R29 closed the
+one instance by hand — so the new step is correctly silent here, and the
+mechanism is now what keeps it that way.
+
+**The design question K5 raised is still open**, and is not a defect: whether a
+scripted subject should be able to declare a rejection at all, or whether "a
+standing property, checked by a script" should always be spelled as a prose
+heuristic with a `run` line. The warning now makes the choice visible at the
+moment it matters instead of leaving it to be discovered, which is as far as a
+gate can take it.
 
 ---
 
@@ -482,16 +592,152 @@ so the template and the formatter cannot drift apart again. R36's own cases
 
 ---
 
+## R39 — medium — a config typo was an internal TypeError, and `validate` read it as the check working — **closed**
+
+Found while building the R31 reproduction, by typing `command` where the schema
+says `check`. It is the obvious name for the thing, and nothing reads it.
+
+```
+$ cat .ratchet/config.json
+{ "subjects": { "s": { "command": "node x.js" } } }
+
+$ ratchet validate s --known-bad HEAD~1 --known-good HEAD
+  ✓ known-bad e56fc0e5 "one" — fails as required: TypeError: command is not iterable
+  ✗ known-good db343330 "two" — FAILS here too: TypeError: command is not iterable
+```
+
+**"fails as required" is the part that matters.** `check: string` is a promise
+the type system makes and JSON does not keep. Nothing validated a subject's
+shape at load, so `undefined` travelled all the way to `tokenize(command)` and
+died there — and an instrument that cannot run fails at *every* commit, which
+is shaped exactly like a check that discriminates perfectly. Here the crash at
+known-good refused the validation, so the outcome was right by accident; the
+mechanism that made it right is "it also crashed on the other side", not
+anything that understood the config was broken.
+
+**Measured blast radius.** Nine malformed shapes were run against the real
+binary. Four crashed, two produced messages naming internals, and — worse —
+three were accepted in silence:
+
+| shape | before |
+|---|---|
+| `"command"` instead of `"check"` | `TypeError: command is not iterable` |
+| `"check": null` / `42` | `TypeError: command is not iterable` |
+| subject is a bare string | `TypeError: command is not iterable` |
+| `"owns": ".ratchet/x.js"` (string) | `EPERM: operation not permitted, scandir 'C:\Documents and Settings'` |
+| `"owns": [1, 2]` | `The "paths[1]" argument must be of type string` |
+| subject is `null` | `Cannot read properties of null (reading 'heuristic')` |
+| `"check": ["node", "x.js"]` | **accepted**, `0/0 rows pass` |
+| `"check": "   "` | **accepted**, `0/0 rows pass` |
+| `"timeoutMs": "soon"` | **accepted**, `0/0 rows pass` |
+
+The `owns` row is the one worth pausing on. A string is iterable, so a bare
+string was walked one character at a time and the owning-rule hash went
+scanning directories that have nothing to do with the repository. A shape error
+in a config file should not be able to send a hash walking the filesystem.
+
+The three silent ones are the familiar failure: a subject that is declared,
+counted, and cannot run. They are R31's shape reached by a different road, and
+neither the gate nor `yield` had anything to say about them.
+
+**The fix, in three parts.**
+
+*One — validate the shape where it is loaded.* `subjectProblems` in
+`src/paths.ts` checks every subject in config.json against the schema its type
+already claims, and `loadSubjects` refuses with the list. Problems are
+collected, not raised one at a time, for the reason the rules file collects
+them: someone fixing a config wants the list rather than a conversation. Every
+message names the subject, the key, and the shape it should have — and a
+near-miss key is named too, because that is the whole search:
+
+```
+ratchet: 1 problem in .../.ratchet/config.json:
+
+  subjects."s".check is missing; a subject needs the command that measures it,
+  as in "check": "node tools/check.js" — this subject has "command", which
+  nothing reads
+
+Nothing was checked. A subject that cannot run is a check that has stopped enforcing.
+```
+
+*Two — stop `fsck` calling it a corpus problem.* Every `loadSubjects` failure
+was pushed as `corpus-unreadable-line`, which sends a reader to the one file
+that is fine. The kind is now `subjects-unreadable`.
+
+*Three — refuse once.* `fsck` and `verify` each rediscovered the broken config
+and each printed the whole paragraph, so the gate arrived as
+`guard failed: integrity, rows` with one cause stated twice. A config that will
+not load is the same class of failure as a rules file that will not parse —
+every subject in it has stopped enforcing — so it is now refused where that one
+is, as an early `subjects` step that returns:
+
+```
+✗ subjects             1 problem in .../.ratchet/config.json:
+  subjects."s".check is missing; ... — this subject has "command", which nothing reads
+guard failed: subjects
+```
+
+The step exists only when there is something to say; a well-formed config adds
+no step, which is why the clean-project step list is unchanged.
+
+**The fuzzer had already generated one of these and could not see it.** The
+`state` target's config mutations were `junk`, `no-subjects` and `empty-check`
+— and `empty-check` is `{"check": ""}`, one of the three silently-accepted
+shapes above. No oracle was violated, because a subject that cannot run
+produces `0/0 rows pass` and breaks nothing the oracles ask about. This is the
+README's own disclosure holding: *a fuzzer is evidence, not a proof*. The
+generator now emits the shapes this entry found as well — `no-check`,
+`owns-string`, `subject-scalar` — and all six appear over the gate's own seed
+(21 junk, 20 owns-string, 17 subject-scalar, 15 no-check, 14 empty-check,
+12 no-subjects in 500 iterations), clean.
+
+**Eight regression tests**, and each part was reverted on its own to prove its
+tests are not vacuous:
+
+```
+# revert the shape validation
+not ok - every malformed subject shape is refused by name, not by TypeError
+not ok - a near-miss key is named, because that is the whole search
+not ok - every problem in a config is reported at once, not one per run
+not ok - subjects given as an array is a top-level error, not fourteen subject errors
+not ok - a malformed config is reported as a subjects problem, not a corpus one
+not ok - a config that will not load is one refusal, not the same paragraph twice
+
+# revert only the fsck relabel
+not ok - a malformed config is reported as a subjects problem, not a corpus one
+
+# revert only guard's early step
+not ok - a config that will not load is one refusal, not the same paragraph twice
+```
+
+The table-driven test asserts, for all fourteen shapes, both that the message
+names the subject and file *and* that it never contains `is not iterable` or
+`Cannot read properties`. Two controls hold the other direction: a well-formed
+subject with every optional key still loads, and a valid config adds no
+`subjects` step — a validator that refuses valid configs is worse than none.
+
+237 tests; `fuzz` clean at 500 iterations on the gate's seed.
+
+**Not validated, on purpose:** whether the `check` command names a program that
+exists. That is a runtime fact about a machine, it changes between commits and
+between checkouts, and the frozen-instrument warning and the probe's own
+`na-env` outcome already speak to it. This entry is about shapes JSON can be
+wrong in, not about the world the command runs in.
+
+---
+
+
 ## Decisions waiting on a human
 
-**The version.** `ratchet/package.json` says `0.9.0` and the README is titled
-"v0.9 prototype". Version bumps in this repository ride with feature commits
-(0.1 → 0.2 → 0.3 → 0.4 → 0.7 → 0.9), and no release was asked for, so none was
-invented — the README says "through v0.9 this was wrong… now fixed" instead.
-There is now an argument for 0.10.0 that did not exist before: the R22 fix
-changes rule hashes for any rules file with a `#` inside a quoted value, which
-quarantines armed rows on upgrade, and a subject changed shape from script to
-prose. Both are the kind of thing a version number exists to announce.
+**The version — decided: 0.10.0.** `ratchet/package.json` and the README title
+now say v0.10. Version bumps in this repository ride with feature commits
+(0.1 → 0.2 → 0.3 → 0.4 → 0.7 → 0.9 → 0.10), and this one carries what a version
+number exists to announce: the R22 fix changes rule hashes for any rules file
+with a `#` inside a quoted value, which quarantines armed rows on upgrade; a
+subject changed shape from script to prose; `fuzz` is a new command; `--json`
+became real on two commands that had ignored it; and `guard` grew a step, so a
+repository that upgrades may see a warning on a tree it did not touch. That
+last one is the point of the release rather than a side effect of it.
 
 **The rest** is unchanged from [NEXT_STEPS_V4.md](NEXT_STEPS_V4.md): whether
 `guard --strict` should be the default, per-branch corpora, whether a validation

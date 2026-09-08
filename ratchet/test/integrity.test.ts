@@ -108,6 +108,23 @@ test("R8: fsck reports bad lines, orphans, and tampered ids", () => {
   assert.equal(r.ok, false);
 });
 
+test("a malformed config is reported as a subjects problem, not a corpus one", () => {
+  // R39. `fsck` funnelled every `loadSubjects` failure into
+  // `corpus-unreadable-line`, which sends a reader to the one file that is
+  // fine. The corpus here is empty and perfectly well formed.
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ subjects: { s: { command: "x" } } }), "utf8");
+  fs.writeFileSync(path.join(dir, "corpus.jsonl"), "", "utf8");
+  fs.writeFileSync(path.join(dir, "journal.jsonl"), "", "utf8");
+
+  const r = fsck(dir);
+  const kinds = r.findings.map((f) => f.kind);
+  assert.ok(kinds.includes("subjects-unreadable"), "the finding names the file that is actually wrong");
+  assert.ok(!kinds.includes("corpus-unreadable-line"), "the corpus is empty and fine");
+  assert.match(r.findings.find((f) => f.kind === "subjects-unreadable")!.detail, /check is missing/);
+  assert.equal(r.ok, false);
+});
+
 test("R8: fsck treats legacy sequential ids as info, not corruption", () => {
   const dir = tmpDir();
   fs.writeFileSync(path.join(dir, "journal.jsonl"), "", "utf8");

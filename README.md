@@ -29,7 +29,7 @@ its successor.
 ### The ratchet — [docs/ratchet/](docs/ratchet/)
 
 - **[ratchet/README.md](ratchet/README.md)** - The working implementation.
-  v0.9 + the secondary verifier: CLI, walkthrough, commands
+  v0.10: CLI, walkthrough, commands
 - **[docs/ratchet/RATCHET.md](docs/ratchet/RATCHET.md)** - The ratchet
   extracted as a standalone library: regression memory for AI-assisted
   development, shipped first
@@ -161,7 +161,7 @@ costs about the same, but is verifiable, durable, and outlives the implementatio
 
 The ratchet was the part worth shipping first, and it does not depend on any other
 part of Flux ([docs/flux/ISSUES.md](docs/flux/ISSUES.md) item D). [ratchet/](ratchet/) is a
-zero-dependency TypeScript CLI with 217 tests and a shipped adversarial fuzzer,
+zero-dependency TypeScript CLI with 237 tests and a shipped adversarial fuzzer,
 validated in four real repos
 ([docs/ratchet/EXPERIMENTS_RATCHET.md](docs/ratchet/EXPERIMENTS_RATCHET.md)) and hardened by code reviews
 that reproduced every defect by execution
@@ -188,10 +188,11 @@ subject has been proven able to fail. `ratchet hooks install` wires it into
 pre-commit; the same command belongs in CI. Nothing depends on anyone
 remembering to run a checker.
 
-It runs under itself in both forms. [`.ratchet/`](.ratchet) configures six
+It runs under itself in both forms. [`.ratchet/`](.ratchet) configures five
 scripted subjects over this repository — checks of the checker, each validated
 against `4abc1d5`, the last v0 commit, where the corresponding bug actually
-lived — plus one prose heuristic pinning its own test suite. Replayed across its
+lived — plus six prose heuristics, three of them standing invariants pinning
+the test suite, the fuzzer, and the visual comparator. Replayed across its
 own history:
 
 ```

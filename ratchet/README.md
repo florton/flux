@@ -1,4 +1,4 @@
-# Ratchet — v0.9 prototype
+# Ratchet — v0.10 prototype
 
 Regression memory for AI-assisted development. The design sketch is
 [../docs/ratchet/RATCHET.md](../docs/ratchet/RATCHET.md); this folder is the working implementation.
@@ -71,6 +71,27 @@ Known defects and accepted trade-offs are in
 > (R37, R38) and the run itself as experiment 5 in
 > [../docs/ratchet/EXPERIMENTS_RATCHET.md](../docs/ratchet/EXPERIMENTS_RATCHET.md).
 > 224 tests.
+>
+> **v0.10 closes the last false green: the subject nothing runs.** `verify`
+> enforces active rows *union* standing invariants, so a subject in neither
+> set was declared, configured, counted by `validation` as proven — and never
+> executed once. It hid a real subject in this repository for four versions,
+> and every number the gate printed was true. `guard` now says what is true —
+> *nothing runs this* — with advice each kind of subject can actually take,
+> and the proof line carries `(nothing runs it)` beside the name it used to
+> affirm without qualification. A warning, not a failure: a subject can be
+> legitimately between rows. The account is R31 in
+> [../docs/ratchet/OUTSTANDING_RATCHET.md](../docs/ratchet/OUTSTANDING_RATCHET.md).
+>
+> **The same session found R39, one layer down.** Building that reproduction
+> meant writing a config, and typing `command` where the schema says `check`
+> produced `TypeError: command is not iterable` at the spawn site — which
+> `validate` reported as the check *failing as required*, because an instrument
+> that cannot run fails at every commit. Three more shapes were accepted in
+> silence, and `owns` written as a bare string was walked one character at a
+> time, sending the owning-rule hash scanning directories outside the
+> repository. A subject's shape is now checked where it is loaded, with the
+> subject, the key, the fix, and any near-miss key named. 237 tests.
 
 Zero runtime dependencies. Zero model calls. The corpus is plain JSONL; the
 journal is plain JSONL; the heuristics are plain text; everything is a file git
@@ -362,21 +383,28 @@ guard failed: rows
 |---|---|---|
 | rules file parses | **yes** | a clause that stopped parsing is a check that stopped running; a `rejects` line the rules accept is one of the ways it can stop |
 | rules file is canonical | warning | formatting is not a regression |
+| every subject has a runnable shape | **yes** | a subject `config.json` cannot spawn is a check that has stopped enforcing; refused here so it does not reach the spawn site as a TypeError |
 | corpus integrity | **yes** | a row hidden behind a parse error is a false pass |
 | active rows hold | **yes** | this is the regression gate |
 | standing invariants hold | **yes** | a property that has always held here does not any more |
 | no armed rows at all | warning | green over nothing: subjects declared, none enforcing |
+| a subject nothing runs | warning | declared, proven, and never executed: no active row and no declared rejection |
 | gate is mostly `na` | warning | green while checking almost nothing |
 | instrument inside the tree | warning | correct at HEAD, wrong under every history command |
 | every subject proven | warning (`--strict`: yes) | caught harder at `capture`, below |
 
-The last four are the shapes of *green over nothing*, and each of them reads as
-success while checking less than it appears to. Two of them are new in v0.9 and
-neither is hypothetical: a defect in this repository was written down as "not a
-defect, the shape of one" because the check that would have caught it ran
-against an empty corpus where the two routes it compared both answer `0/0 rows
-pass`; and one of the two field experiments claimed a frozen instrument in its
-write-up while pointing at an untracked script inside the tree it measured.
+The last five are the shapes of *green over nothing*, and each of them reads as
+success while checking less than it appears to. None is hypothetical. A defect
+in this repository was written down as "not a defect, the shape of one" because
+the check that would have caught it ran against an empty corpus where the two
+routes it compared both answer `0/0 rows pass`; one of the two field
+experiments claimed a frozen instrument in its write-up while pointing at an
+untracked script inside the tree it measured; and the newest of the five, in
+v0.10, hid a subject of this repository's own for four versions — `verify`
+enforces active rows *union* standing invariants, and a subject in neither set
+was counted as proven while nothing ever ran it. That one is a warning rather
+than a failure, because a subject can be legitimately between rows; what it
+must not be is silent.
 
 ### Wire it into git
 
@@ -1373,7 +1401,7 @@ npm run build
 npm test
 ```
 
-224 tests: one regression test per defect closed from the v0 review, the visual
+237 tests: one regression test per defect closed from the v0 review, the visual
 codec/diff/loop tests, the v0.7 additions — canonicalization and its
 failure modes, every extractor and predicate, the probe's outcomes and
 its seeding, the capture gate, `guard`, the hook installer, and the
@@ -1383,7 +1411,11 @@ a prose heuristic reaching an instrument that lives only in the home, and
 rejections and every way one can fail to be a proof, standing invariants and
 their separation from rows, the nth match and measure-to-measure comparisons,
 both directions of a transition in `replay` and `bisect`, the instrument-inside-
-the-tree detector, and the two kinds of "no verdict". The demo is generated by
+the-tree detector, and the two kinds of "no verdict" — and the v0.10 additions:
+the subject nothing runs, with each check leaving a mark on disk so that "it
+never executed" is a fact outside the gate's own bookkeeping, and every shape a
+config.json subject can be wrong in, asserted to name the subject and never to
+leak a TypeError. The demo is generated by
 `node demo/setup.js`; see [demo/README.md](demo/README.md).
 
 ## What this prototype still leaves out
