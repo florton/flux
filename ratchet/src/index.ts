@@ -14,7 +14,10 @@ import { listRows, formatList, showRow, formatRow } from "./inspect";
 import { appendJournal } from "./journal";
 import { recordVisual, diffImageFiles, describeDiff, ratchetHome, type VisualInput } from "./visual-cli";
 import { guard, formatGuard } from "./guard";
-import { fmt, formatFmt, listHeuristics, formatHeuristicList, heuristicLog, formatHeuristicLog } from "./heuristics-cmd";
+import {
+  fmt, formatFmt, listHeuristics, formatHeuristicList, heuristicLog, formatHeuristicLog,
+  newHeuristic, formatNewHeuristic,
+} from "./heuristics-cmd";
 import { installHook, uninstallHook, hookStatus } from "./hooks";
 import { adopt, formatAdopt } from "./adopt";
 import { renderComment } from "./pr-comment";
@@ -26,16 +29,18 @@ import { validatedSubjects } from "./validate";
 import { subjectProofs } from "./proof";
 import { ruleHash } from "./rule";
 import { toSubject } from "./heuristic-config";
-import { RULES_TEMPLATE, CONFIG_TEMPLATE, INIT_MESSAGE } from "./templates";
+import { RULES_TEMPLATE, CONFIG_TEMPLATE, INIT_MESSAGE, AGENTS_TEMPLATE } from "./templates";
 
 function usage(): string {
   return `ratchet — regression memory for AI-assisted development
 
-  ratchet init                     create .ratchet/ with a config and rules template
+  ratchet init                     create .ratchet/ (config, rules, AGENTS.md).
+                                   Safe to re-run: adds missing files, touches nothing.
   ratchet guard [--strict] [--quiet]   the one command a build runs: parse, integrity,
                                    rows, validation. Exits nonzero on any failure.
   ratchet hooks install|uninstall|status [--pre-push]
   ratchet heuristics [show <name>] [log <name>]   the prose subjects and their history
+  ratchet heuristics new <name> [--run "<cmd>"]   start a block, with the name checked first
   ratchet fmt [--check]            snap heuristics.rules to the canonical vocabulary
   ratchet adopt <subject> --good <ref> [--bad ref] [--every N] [--dry-run]
   ratchet yield                    which heuristics still produce evidence
@@ -58,8 +63,13 @@ function usage(): string {
   ratchet bisect <id> --from <older-ref> --to <newer-ref> [--setup "npm ci"]
                                    names the boundary and which way it runs
   ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
-                 [--no-pinpoint]   every transition in the range, with its direction
+                 [--subject name] [--row id] [--no-pinpoint]
+                                   every transition in the range, with its direction.
+                                   --subjects --subject <name> is how you find a commit
+                                   where one subject fails, e.g. for validate's --known-bad
   ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]
+                 [--crash-is-the-regression]   a known-bad run that crashed rather than
+                                   measured is refused, unless the crash is the bug
   ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
   ratchet visual record <subject> --route <url-or-route> [--viewport WxH] [--tolerance N]
                                    [--max-percent P] [--wait-ms ms]
@@ -122,7 +132,7 @@ const VALUE_FLAGS = new Set([
   "--every", "--known-bad", "--known-good", "--input", "--confirm",
   "--route", "--file", "--viewport", "--tolerance", "--max-percent",
   "--wait-ms", "--out", "--command", "--stale-after", "--title",
-  "--seed", "--iterations", "--targets", "--max-findings",
+  "--seed", "--iterations", "--targets", "--max-findings", "--run",
 ]);
 
 function parseArgs(args: string[]): Args {
@@ -168,26 +178,44 @@ async function main(): Promise<void> {
   switch (command) {
     case "init": {
       const dir = path.join(process.cwd(), ".ratchet");
-      if (fs.existsSync(dir)) {
-        console.error(".ratchet already exists");
-        process.exit(1);
-      }
+      const fresh = !fs.existsSync(dir);
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(CONFIG_TEMPLATE, null, 2) + "\n", "utf8");
-      fs.writeFileSync(path.join(dir, "heuristics.rules"), RULES_TEMPLATE, "utf8");
-      fs.writeFileSync(path.join(dir, "corpus.jsonl"), "", "utf8");
-      fs.writeFileSync(path.join(dir, "journal.jsonl"), "", "utf8");
-      // Union-merge keeps two branches' appends from conflicting on the last
-      // line; content-addressed ids keep them from colliding once merged.
-      fs.writeFileSync(path.join(dir, ".gitattributes"), "corpus.jsonl merge=union\njournal.jsonl merge=union\n", "utf8");
-      // Screenshot artifacts are repro output, not memory: the baselines are
-      // committed, the failure artifacts generated at verify time are not.
-      fs.writeFileSync(
-        path.join(dir, ".gitignore"),
-        "visual/*-actual.png\nvisual/*-diff.png\n",
-        "utf8"
-      );
-      console.log(INIT_MESSAGE);
+
+      // Additive, never destructive. Refusing outright on an existing home
+      // left every project already using the ratchet with no way to pick up
+      // a file a later version started shipping — which is how `AGENTS.md`
+      // would have reached new projects only. Nothing here overwrites: a file
+      // that exists is the project's, whatever it now contains.
+      const files: [string, string][] = [
+        ["AGENTS.md", AGENTS_TEMPLATE],
+        ["config.json", JSON.stringify(CONFIG_TEMPLATE, null, 2) + "\n"],
+        ["heuristics.rules", RULES_TEMPLATE],
+        ["corpus.jsonl", ""],
+        ["journal.jsonl", ""],
+        // Union-merge keeps two branches' appends from conflicting on the last
+        // line; content-addressed ids keep them from colliding once merged.
+        [".gitattributes", "corpus.jsonl merge=union\njournal.jsonl merge=union\n"],
+        // Screenshot artifacts are repro output, not memory: the baselines are
+        // committed, the failure artifacts generated at verify time are not.
+        [".gitignore", "visual/*-actual.png\nvisual/*-diff.png\n"],
+      ];
+      const written: string[] = [];
+      for (const [name, body] of files) {
+        const at = path.join(dir, name);
+        if (fs.existsSync(at)) continue;
+        fs.writeFileSync(at, body, "utf8");
+        written.push(name);
+      }
+
+      if (fresh) {
+        console.log(INIT_MESSAGE);
+      } else if (written.length === 0) {
+        console.log(".ratchet is already complete — nothing to add");
+      } else {
+        console.log(`.ratchet already exists; added ${written.length} missing file(s):`);
+        for (const name of written) console.log(`  ${name}`);
+        console.log("\nnothing existing was touched.");
+      }
       break;
     }
 
@@ -273,6 +301,23 @@ async function main(): Promise<void> {
         break;
       }
 
+      if (sub === "new") {
+        const name = positionals[1];
+        if (!name) {
+          console.error('usage: ratchet heuristics new <name> [--run "<command>"]');
+          process.exit(1);
+        }
+        try {
+          const created = newHeuristic(dir, name, { run: flags.get("--run") });
+          emit(json, created, formatNewHeuristic(created));
+        } catch (err) {
+          // A name collision is a finding with a fix in it, not a stack trace.
+          console.error(err instanceof Error ? err.message : String(err));
+          process.exit(1);
+        }
+        break;
+      }
+
       const items = listHeuristics(cwd, dir);
       if (sub === "show") {
         const name = positionals[1];
@@ -310,7 +355,7 @@ async function main(): Promise<void> {
       const subject = positionals[0];
       const good = flags.get("--good");
       if (!subject || !good) {
-        console.error('usage: ratchet adopt <subject> --good <ref> [--bad ref] [--every N] [--setup "npm ci"] [--dry-run]');
+        console.error('usage: ratchet adopt <subject> --good <ref> [--bad ref] [--every N] [--setup "npm ci"] [--dry-run] [--crash-is-the-regression]');
         process.exit(1);
       }
       const every = flags.get("--every");
@@ -322,6 +367,7 @@ async function main(): Promise<void> {
         actor: flags.get("--actor") ?? "human",
         every: every ? Math.max(1, parseInt(every, 10)) : undefined,
         dryRun: bools.has("--dry-run"),
+        crashIsTheRegression: bools.has("--crash-is-the-regression"),
       });
       emit(json, result, formatAdopt(result));
       // Nothing captured is not an error — it is a finding about the heuristic.
@@ -573,7 +619,13 @@ async function main(): Promise<void> {
       const subject = positionals[0];
       const knownBad = flags.get("--known-bad");
       if (!subject || !knownBad) {
-        console.error('usage: ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]');
+        console.error(
+          [
+            "usage: ratchet validate <subject> --known-bad ref [--known-good ref] [--input json] [--crash-is-the-regression]",
+            "  --known-bad is a commit where the check must fail. To find one:",
+            "    ratchet replay --subjects --subject <subject> --good <an-old-ref>",
+          ].join("\n")
+        );
         process.exit(1);
       }
       const raw = flags.get("--input");
@@ -584,6 +636,7 @@ async function main(): Promise<void> {
         setup: flags.get("--setup"),
         ratchetHome: homeDir(cwd),
         actor: flags.get("--actor") ?? "human",
+        crashIsTheRegression: bools.has("--crash-is-the-regression"),
       });
       emit(json, result, formatValidate(result));
       if (!result.valid) process.exit(1);

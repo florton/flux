@@ -6,6 +6,7 @@ import { ruleHash } from "./rule";
 import { commitInfo, runSetup, withWorktree } from "./worktree";
 import { loadSubjects } from "./paths";
 import { subjectProofs } from "./proof";
+import { crashAdvice, crashLine, crashWitness, type CrashWitness } from "./witness";
 import type { RatchetConfig } from "./types";
 
 export interface ValidateOptions {
@@ -16,6 +17,16 @@ export interface ValidateOptions {
   setup?: string;
   ratchetHome?: string;
   actor?: string;
+  /**
+   * Affirm that the crash at known-bad *is* the regression.
+   *
+   * A bug whose symptom is a stack trace is a perfectly good known-bad, so
+   * this cannot be decided mechanically — but it also cannot be assumed,
+   * because the same shape is what a pinned instrument does at every commit
+   * it predates. The claim is therefore made explicitly, and recorded in the
+   * journal as having been made.
+   */
+  crashIsTheRegression?: boolean;
 }
 
 export interface ValidateResult {
@@ -24,6 +35,14 @@ export interface ValidateResult {
   knownBad: { ref: string; sha: string; subject: string; failed: boolean; reason: string };
   knownGood?: { ref: string; sha: string; subject: string; passed: boolean; reason: string };
   valid: boolean;
+  /**
+   * Set when the known-bad run died rather than measured. Present even when
+   * the proof was recorded anyway, so `--json` consumers can see the claim
+   * that was made.
+   */
+  crash?: CrashWitness;
+  /** True when a crash witness was accepted on the author's word. */
+  crashAffirmed?: boolean;
 }
 
 /**
@@ -81,6 +100,10 @@ export async function validate(cwd: string, subject: string, opts: ValidateOptio
   const rule = ruleHash(subject, subj, cwd);
   const badFailed = result.badRun.outcome === "fail";
   const goodPassed = result.goodRun ? result.goodRun.outcome === "pass" : true;
+  // A failure that is only a corpse is not a proof. Refused rather than
+  // decided: see witness.ts for why this cannot be settled mechanically.
+  const crash = crashWitness(result.badRun) ?? undefined;
+  const crashBlocks = crash !== undefined && !opts.crashIsTheRegression;
 
   const out: ValidateResult = {
     subject,
@@ -101,13 +124,19 @@ export async function validate(cwd: string, subject: string, opts: ValidateOptio
           reason: result.goodRun!.reason,
         }
       : undefined,
-    valid: badFailed && goodPassed,
+    valid: badFailed && goodPassed && !crashBlocks,
+    crash,
+    crashAffirmed: crash !== undefined && opts.crashIsTheRegression === true,
   };
 
   if (out.valid) {
     const detail =
       `validated "${subject}" (rule ${rule}): fails at ${bad.sha.slice(0, 8)} "${bad.subject}"` +
-      (good ? `, passes at ${good.sha.slice(0, 8)} "${good.subject}"` : " (no known-good ref given)");
+      (good ? `, passes at ${good.sha.slice(0, 8)} "${good.subject}"` : " (no known-good ref given)") +
+      // On the record, in the proof itself: a reviewer reading the journal
+      // must be able to see that the known-bad run was a crash and that a
+      // person said the crash was the bug.
+      (out.crashAffirmed ? ` — known-bad died with ${crash!.detail}, affirmed as the regression by ${opts.actor ?? "human"}` : "");
     appendJournal(path.join(ratchetDir, "journal.jsonl"), {
       at: new Date().toISOString(),
       kind: "validation",
@@ -136,10 +165,18 @@ export function validatedSubjects(cwd: string, ratchetDir: string, config: Ratch
 
 export function formatValidate(r: ValidateResult): string {
   const lines = [`subject: ${r.subject}  (rule ${r.ruleHash})`];
-  lines.push(
-    `  ${r.knownBad.failed ? "✓" : "✗"} known-bad ${r.knownBad.sha.slice(0, 8)} "${r.knownBad.subject}" — ` +
-      (r.knownBad.failed ? `fails as required: ${r.knownBad.reason}` : "PASSES, so this subject is too weak to catch that bug")
-  );
+  // Three states on this line, not two. A crash is neither "fails as
+  // required" nor "passes" — printing it with the same ✓ as a measured
+  // failure is the whole defect this distinction exists to close.
+  const crashed = r.crash !== undefined;
+  const mark = !r.knownBad.failed ? "✗" : crashed && !r.crashAffirmed ? "?" : "✓";
+  const said = !r.knownBad.failed
+    ? "PASSES, so this subject is too weak to catch that bug"
+    : crashed
+      ? `${r.crashAffirmed ? "failed, and you affirmed the crash is the regression" : "did not measure anything"}` +
+        ` — it died with ${r.crash!.detail}: ${crashLine(r.knownBad.reason)}`
+      : `fails as required: ${r.knownBad.reason}`;
+  lines.push(`  ${mark} known-bad ${r.knownBad.sha.slice(0, 8)} "${r.knownBad.subject}" — ${said}`);
   if (r.knownGood) {
     lines.push(
       `  ${r.knownGood.passed ? "✓" : "✗"} known-good ${r.knownGood.sha.slice(0, 8)} "${r.knownGood.subject}" — ` +
@@ -147,10 +184,16 @@ export function formatValidate(r: ValidateResult): string {
     );
   }
   lines.push("");
-  lines.push(
-    r.valid
-      ? "validated — proof recorded in the journal against this rule hash"
-      : "NOT validated — a subject that passes through a known bug cannot be trusted to catch a new one"
-  );
+  if (r.valid) {
+    lines.push(
+      r.crashAffirmed
+        ? "validated — proof recorded in the journal against this rule hash, noting that the known-bad run crashed and you affirmed the crash is the regression"
+        : "validated — proof recorded in the journal against this rule hash"
+    );
+  } else if (r.crash && !r.crashAffirmed) {
+    lines.push("NOT validated — " + crashAdvice(r.crash, r.subject, r.knownBad.ref).join("\n"));
+  } else {
+    lines.push("NOT validated — a subject that passes through a known bug cannot be trusted to catch a new one");
+  }
   return lines.join("\n");
 }

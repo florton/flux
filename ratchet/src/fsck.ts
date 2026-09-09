@@ -4,7 +4,7 @@ import { createHash } from "crypto";
 import { foldCorpus, isLegacyId, readCorpus, rowId, stableStringify } from "./corpus";
 import { readJournalFile } from "./journal";
 import { loadSubjects } from "./paths";
-import { instrumentsInsideTree } from "./instrument";
+import { instrumentsInsideTree, unownedInstruments } from "./instrument";
 import type { CorpusEvent, LineProblem, RatchetConfig } from "./types";
 
 export interface FsckFinding {
@@ -16,7 +16,9 @@ export interface FsckFinding {
     | "id-mismatch"
     | "legacy-id"
     | "unconfigured-subject"
+    | "shadowed-heuristic"
     | "instrument-inside-tree"
+    | "instrument-unowned"
     | "visual-baseline-missing"
     | "visual-baseline-hash-mismatch";
   severity: "error" | "warning" | "info";
@@ -94,7 +96,7 @@ export function fsck(ratchetDir: string, projectRoot?: string): FsckReport {
       }
       for (const name of config.collisions) {
         push(
-          "unconfigured-subject",
+          "shadowed-heuristic",
           "warning",
           `"${name}" is declared both in config.json and in heuristics.rules — config.json wins; delete one`
         );
@@ -106,6 +108,15 @@ export function fsck(ratchetDir: string, projectRoot?: string): FsckReport {
       const root = projectRoot ?? path.dirname(ratchetDir);
       for (const f of instrumentsInsideTree(root, config)) {
         push("instrument-inside-tree", "warning", `${f.detail}. Fix: ${f.fix}`);
+      }
+
+      // And the quieter half of the same question. The instrument is carried
+      // across history correctly, but its *contents* are not in the rule
+      // hash, so rewriting it re-points every row it armed instead of
+      // quarantining them. `rule.ts` promised this check by name for four
+      // versions before it existed.
+      for (const f of unownedInstruments(root, ratchetDir, config)) {
+        push("instrument-unowned", "warning", `${f.detail}. Fix: ${f.fix}`);
       }
     } catch (err) {
       // Not the corpus: this is config.json or heuristics.rules failing to

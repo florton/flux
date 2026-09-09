@@ -99,16 +99,53 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
     return { ok: false, steps, results: [] };
   }
 
+  // A heuristic block whose name is already taken by config.json is discarded
+  // by `mergeConfig` — config wins, so an existing project's behavior cannot
+  // change underneath it when a rules file appears. That is the right default
+  // and it was silent here: the block parses, `heuristics canonical` counts
+  // it, `heuristics` lists it with its `rejects` line, and nothing runs it.
+  // Every check the gate makes about that name is then a check about the
+  // *script*, which is how the advice below came to tell people to write a
+  // block they had already written.
+  //
+  // A warning, not an error: config winning is documented behavior, and a
+  // build that starts failing on upgrade for a file somebody wrote correctly
+  // is its own kind of dishonesty. But it is said out loud, here, in the one
+  // command a build runs.
+  if (config.collisions.length > 0) {
+    add(
+      "shadowed heuristics",
+      false,
+      "warning",
+      [
+        `${config.collisions.length} heuristic block(s) in ${path.basename(loaded.file)} are not running: ${config.collisions.join(", ")}`,
+        `  config.json declares the same name(s) and config.json wins, so the prose never becomes a subject —`,
+        `  it parses, it is counted, and nothing executes it.`,
+        `  fix: delete the config.json entry to let the prose enforce, or give the heuristic block its own name`,
+      ].join("\n")
+    );
+  }
+
   // 2. Corpus and journal integrity.
+  //
+  // Errors fail the build. Warnings used to be dropped on the floor here,
+  // which is how `fsck` could name a problem the gate stayed green and silent
+  // about — a person running the one command a build runs saw nothing. The
+  // instrument-inside-tree finding is the exception: it has its own step
+  // below, and printing the same paragraph twice is how a gate gets skimmed.
   const integrity = fsck(opts.ratchetHome, cwd);
   const errors = integrity.findings.filter((f) => f.severity === "error");
+  const notes = integrity.findings.filter(
+    (f) => f.severity === "warning" && f.kind !== "instrument-inside-tree" && f.kind !== "shadowed-heuristic"
+  );
+  const surfaced = [...errors, ...notes];
   add(
     "integrity",
-    errors.length === 0,
-    "error",
-    errors.length === 0
+    surfaced.length === 0,
+    errors.length > 0 ? "error" : "warning",
+    surfaced.length === 0
       ? "corpus and journal readable, ids match their content"
-      : errors.map((f) => `${f.kind}: ${f.detail}`).join("\n")
+      : surfaced.map((f) => `${f.kind}: ${f.detail}`).join("\n")
   );
 
   // 3. The regression gate itself.
@@ -192,8 +229,14 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
   const ran = new Set(results.map((r) => r.subject));
   const unrun = Object.keys(config.subjects).filter((n) => !ran.has(n)).sort();
   if (unrun.length > 0 && !empty) {
+    const shadowedSet = new Set(config.collisions);
     const unrunProse = unrun.filter((n) => config.fromRules.has(n));
-    const scripted = unrun.filter((n) => !config.fromRules.has(n));
+    // A shadowed name is in neither set on its own terms: it is absent from
+    // `fromRules` because the merge dropped it, which reads here as "scripted,
+    // with nowhere to put a rejection" — and sends somebody to write the block
+    // sitting in front of them. Named separately, with the actual fix.
+    const shadowed = unrun.filter((n) => shadowedSet.has(n));
+    const scripted = unrun.filter((n) => !config.fromRules.has(n) && !shadowedSet.has(n));
     // Same discipline as the validation advice below: `rejects` is a clause in
     // the rules file, so it is only on offer to a subject that has a block
     // there. Telling a scripted subject to add one is advice it cannot take.
@@ -201,6 +244,12 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
     if (unrunProse.length > 0) {
       const who = unrunProse.length === unrun.length ? "" : ` for ${unrunProse.join(", ")}`;
       how.push(`  or enforce it with no row${who}, in the rules: rejects <measure> <a value the rules must refuse>`);
+    }
+    if (shadowed.length > 0) {
+      how.push(
+        `  ${shadowed.join(", ")} already has a heuristic block, shadowed by the config.json entry of the same name` +
+          ` — nothing in it enforces, including its rejects line: delete the config.json entry`
+      );
     }
     if (scripted.length > 0) {
       how.push(
@@ -272,10 +321,23 @@ export async function guard(cwd: string, opts: GuardOptions): Promise<GuardResul
   // impossible thing is a gate you stop reading. History proof suits both, so
   // it is always offered; the second line is named when only some can use it.
   const unprovenProse = unproven.filter((s) => config.fromRules.has(s));
-  const advice = [`  prove one against history:   ratchet validate ${unproven[0]} --known-bad <sha> --known-good HEAD`];
+  const unprovenShadowed = unproven.filter((s) => config.collisions.includes(s));
+  const advice = [
+    `  prove one against history:   ratchet validate ${unproven[0]} --known-bad <sha> --known-good HEAD`,
+    // `<sha>` was the whole cost of this advice: nothing said where one comes
+    // from, so finding it meant hand-rolling a sweep over history. The command
+    // that answers it already exists.
+    `    find a <sha> where it fails:  ratchet replay --subjects --subject ${unproven[0]} --good <an-old-ref>`,
+  ];
   if (unprovenProse.length > 0) {
     const who = unprovenProse.length === unproven.length ? "" : ` for ${unprovenProse.join(", ")}`;
     advice.push(`  or without it${who}, in the rules: rejects <measure> <a value the rules must refuse>`);
+  }
+  if (unprovenShadowed.length > 0) {
+    advice.push(
+      `  ${unprovenShadowed.join(", ")} has a heuristic block that is shadowed by config.json —` +
+        ` any rejects line in it counts for nothing until the config.json entry is deleted`
+    );
   }
   add(
     "validation",

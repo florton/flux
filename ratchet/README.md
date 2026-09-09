@@ -389,8 +389,11 @@ guard failed: rows
 | standing invariants hold | **yes** | a property that has always held here does not any more |
 | no armed rows at all | warning | green over nothing: subjects declared, none enforcing |
 | a subject nothing runs | warning | declared, proven, and never executed: no active row and no declared rejection |
+| a heuristic block that is shadowed | warning | `config.json` declares the same name and wins, so the prose parses, is counted, is listed — and never runs |
+| an instrument no subject owns | warning | its contents are outside the rule hash, so rewriting it re-points every row it armed |
 | gate is mostly `na` | warning | green while checking almost nothing |
 | instrument inside the tree | warning | correct at HEAD, wrong under every history command |
+| anything else `fsck` finds | warning | `guard` surfaces `fsck`'s warnings; a finding only one command prints is a finding nobody reads |
 | every subject proven | warning (`--strict`: yes) | caught harder at `capture`, below |
 
 The last five are the shapes of *green over nothing*, and each of them reads as
@@ -739,10 +742,53 @@ The meta-rule behind all seven: humans and models *propose* — heuristics,
 pins, accepts — and deterministic machinery *disposes* — discrimination,
 verification, replay. The division is the product.
 
+## Agents reading a `.ratchet/` folder
+
+`ratchet init` writes **`.ratchet/AGENTS.md`**, an operating guide that lives
+where it is found. An agent opening a repository does not read a dependency's
+README; it reads the files in front of it — so everything needed to not do
+damage here was, in practice, nowhere. `init` is additive and overwrites
+nothing, so an existing project picks the file up by re-running it:
+
+```
+$ ratchet init
+.ratchet already exists; added 1 missing file(s):
+  AGENTS.md
+
+nothing existing was touched.
+```
+
+What it says, in short — the same loop for a person:
+
+1. **`ratchet guard` before you start and after you finish.** `✗` fails the
+   build, `!` is a warning. Running it first tells you what was already broken,
+   which is the difference between a report and a guess.
+2. **A failing row is a counterexample recurring.** Fix the code. If the
+   expectation is genuinely wrong, `ratchet accept <id> --reason "..."` — never
+   delete the row, never loosen the bound quietly.
+3. **Add a check with `ratchet heuristics new <name>`**, put its instrument in
+   `.ratchet/tools/`, run it as `{home}/tools/...`, and declare `owns`.
+4. **Prove it can fail.** Either against history (`ratchet adopt`, or
+   `ratchet validate` with a ref found by `ratchet replay --subjects
+   --subject <name>`), or with a `rejects` line for a standing invariant that
+   has never been violated here.
+5. **Never hand-edit `corpus.jsonl` or `journal.jsonl`.** Ids are
+   content-addressed; `fsck` detects it, and a synthetic row is a lie about the
+   past.
+6. **Report what you measured.** Which subjects enforce, which proof tier each
+   has, what you left red and why.
+
+And the two things worth knowing before trusting a green tick, which the file
+states out loud because the gate cannot: a declared rejection proves the *rule*
+discriminates, not that the instrument exercised anything — a check whose script
+prints three hardcoded constants passes every gate here — and a warning is not
+nothing, it is one of the ways a gate is green over nothing.
+
 ## Commands
 
 ```
-ratchet init                      create .ratchet/ with a rules and config template
+ratchet init                      create .ratchet/ (rules, config, AGENTS.md).
+                                  Safe to re-run: adds missing files, overwrites none.
 ratchet guard [--strict] [--quiet] [--jobs N]
                                   the one command a build runs: parse, integrity,
                                   rows, validation. Nonzero on any failure.
@@ -750,6 +796,9 @@ ratchet hooks install|uninstall|status [--pre-push] [--command "..."]
 ratchet heuristics                list the prose subjects, their rules and rows
 ratchet heuristics show <name>
 ratchet heuristics log <name>     every commit that changed this heuristic
+ratchet heuristics new <name> [--run "<cmd>"]
+                                  append a commented skeleton, with both name
+                                  collisions refused before anything is written
 ratchet fmt [--check]             snap heuristics.rules to the canonical vocabulary
 ratchet adopt <subject> --good ref [--bad ref] [--every N] [--setup "..."] [--dry-run]
 ratchet yield [--stale-after N]   which heuristics still produce evidence
@@ -771,8 +820,13 @@ ratchet fuzz [--seed N] [--iterations N] [--targets state,cli,rules]
 ratchet bisect <id> --from <older-ref> --to <newer-ref> [--setup "npm ci"]
                                   names the boundary and which way it runs
 ratchet replay --good ref [--bad ref] [--every N|day|week] [--subjects] [--jobs N]
-               [--setup "npm ci"] [--no-pinpoint]
-                                  every transition in the range, with its direction
+               [--subject name] [--row id] [--setup "npm ci"] [--no-pinpoint]
+                                  every transition in the range, with its direction.
+                                  --subjects --subject <name> answers "where in my
+                                  history does this subject fail" — which is where
+                                  validate's --known-bad comes from
+ratchet validate <subject> --known-bad ref [--known-good ref] [--input json]
+                          [--crash-is-the-regression]
 ratchet visual diff <a.png> <b.png> [--tolerance N] [--max-percent P] [--out file]
 ratchet visual record <subject> --route <url> [--file <png>] [--viewport WxH]
                        [--tolerance N] [--max-percent P] [--wait-ms ms]
@@ -1093,6 +1147,16 @@ contents of whatever files the subject declares it `owns`:
 | rule unchanged | **hard block** — this is a regression |
 | rule edited since capture | **quarantine** — routed to review, does not fail the build |
 
+`owns` is not optional decoration. Without it only the command *string* is
+hashed, and `node {home}/tools/probe.js` is the same string whatever that file
+now contains — so rewriting the instrument re-points every row it armed
+instead of quarantining them. Measured, in a scratch project: a row armed by
+`adopt` from a real regression, the bug still in the tree, the un-owned
+instrument gutted to `process.exit(0)` — `0/1 rows pass` became `1/1 rows
+pass`, no quarantine, no warning, the validation still on the books. `ratchet
+fsck` and `ratchet guard` now report a `{home}` instrument that no subject
+owns, as `instrument-unowned`.
+
 When the heuristic moves, the quality-control analysis moves with it, and a
 failure no longer cleanly means the code regressed. Two ways out, both on the
 record: `ratchet reaffirm <id>` re-pins the row to the current rule (the
@@ -1186,6 +1250,37 @@ invalidates its own validation. This is the mechanical answer to "who checks
 the checkers"; as a convention rather than a command it erodes on the first
 busy afternoon.
 
+**Where a `--known-bad` ref comes from.** Not from reading `git log`, and not
+from a sweep script written for the occasion:
+
+```
+$ ratchet replay --subjects --subject galaxy-structure --good <an-old-ref>
+```
+
+**A crash is not a proof.** An instrument that cannot *run* at a commit exits
+nonzero there, and it does so at every commit it cannot run at — which is
+shaped exactly like a check that discriminates perfectly. A pinned instrument
+replayed across history hits this the moment it reaches commits predating the
+file it loads:
+
+```
+$ ratchet validate quality --known-bad e9775c86 --known-good HEAD
+  ? known-bad e9775c86 "before the engine existed" — did not measure anything
+    — it died with an uncaught exception (a stack frame): Error: Cannot find
+      module '…/src/engine.js'
+  ✓ known-good 70085d2f "add engine" — passes as required
+
+NOT validated — the known-bad run did not measure anything …
+```
+
+Nothing reaches the journal. The honest fix is usually the mechanism that
+already exists: exit **125** where the check does not apply to that commit, or
+**126** where the environment cannot run it there. If the crash genuinely *is*
+the regression — a bug whose symptom is a stack trace is a fine known-bad —
+say so with `--crash-is-the-regression`, and the proof records that a person
+made that claim. The same refusal guards `ratchet adopt`, which writes the
+same proof and would otherwise mint a row whose expectation is a stack trace.
+
 ## Bisect (retroactive replay)
 
 `ratchet bisect <id> --from <older-ref> --to <newer-ref>` binary-searches the
@@ -1216,8 +1311,11 @@ worktree before each probe.
 ```
 .ratchet/
   config.json      # subjects → check commands (authored)
+  heuristics.rules # prose subjects, in the closed vocabulary (authored)
+  tools/           # instruments, reached as {home}/tools/... (authored)
   corpus.jsonl     # append-only capture/accept/reopen events (committed)
   journal.jsonl    # append-only decisions (committed)
+  AGENTS.md        # how to work in this folder, for people and agents (committed)
   .gitattributes   # merge=union for the two JSONL files
   .gitignore       # visual artifacts (*-actual.png, *-diff.png) stay local
   visual/<id>.png  # pin baselines, content-addressed like rows (committed)

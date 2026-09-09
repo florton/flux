@@ -22,6 +22,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { tokenize } from "./runner";
+import { collectOwned } from "./rule";
 import { SUBSTITUTION_TOKENS } from "./substitution";
 import { git } from "./worktree";
 import type { RatchetConfig } from "./types";
@@ -199,6 +200,79 @@ export function instrumentsInsideTree(cwd: string, config: RatchetConfig): Instr
         fix:
           `move it under the ratchet home and reach it through the token, as in: ` +
           command.split(named).join("{home}/" + path.basename(named)),
+      });
+    }
+  }
+  return findings;
+}
+
+export interface UnownedFinding {
+  subject: string;
+  /** The instrument path, as the command spells it. */
+  instrument: string;
+  /** Repo-relative, with forward slashes — what an `owns` entry would say. */
+  relative: string;
+  detail: string;
+  fix: string;
+}
+
+/**
+ * Subjects whose frozen instrument is not part of their rule's identity.
+ *
+ * `owns` is what makes the accept ceremony safe: the rule hash is the check
+ * command plus the contents of the files the subject declares it owns, so
+ * editing the measuring script quarantines the rows it produced instead of
+ * silently re-pointing them at a different measurement. Without it only the
+ * command string is hashed, and `node {home}/tools/check.js` is the same
+ * string whatever that file now contains.
+ *
+ * `rule.ts` said "`ratchet fsck` says so" for four versions and fsck said
+ * nothing — the word `owns` appeared in neither fsck nor guard. Reproduced
+ * against a scratch project: a row armed by `adopt` from a real regression,
+ * the bug still in the tree, the un-owned instrument rewritten to
+ * `process.exit(0)` — `0/1 rows pass` became `1/1 rows pass`, with no
+ * quarantine, no warning, and the validation still on the books.
+ *
+ * Only `{home}`-rooted instruments are considered. One inside the tree is a
+ * worse problem with its own finding, and one on PATH is not a file this
+ * repository can own.
+ */
+export function unownedInstruments(cwd: string, ratchetHome: string, config: RatchetConfig): UnownedFinding[] {
+  const findings: UnownedFinding[] = [];
+  for (const [subject, subj] of Object.entries(config.subjects)) {
+    const command = subj.heuristic?.run ?? subj.check;
+    const shell = subj.heuristic ? subj.heuristic.shell : subj.shell === true;
+    if (command === undefined) continue;
+
+    const owned = new Set(
+      collectOwned(subj.owns ?? [], cwd).map((p) => p.split(path.sep).join("/"))
+    );
+    for (const named of instrumentPaths(command, shell)) {
+      if (!named.includes("{home}")) continue;
+      const abs = path.resolve(named.split("{home}").join(ratchetHome));
+      // A path that does not resolve to a file is `verify`'s problem to
+      // report, in the words of the failure. Not this finding.
+      try {
+        if (!fs.statSync(abs).isFile()) continue;
+      } catch {
+        continue;
+      }
+      const rel = path.relative(cwd, abs);
+      if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      const relative = rel.split(path.sep).join("/");
+      if (owned.has(relative)) continue;
+
+      findings.push({
+        subject,
+        instrument: named,
+        relative,
+        detail:
+          `"${subject}" measures through ${relative} and does not declare it in \`owns\`, so the instrument's ` +
+          `contents are not part of the rule hash: rewriting it re-points every row that subject armed, with no ` +
+          `quarantine and no warning`,
+        fix: subj.heuristic
+          ? `add a line to the heuristic block:  owns     ${relative}`
+          : `add it to the subject in config.json:  "owns": ["${relative}"]`,
       });
     }
   }

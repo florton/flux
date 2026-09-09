@@ -26,6 +26,7 @@ import { failureSignature } from "./signature";
 import { ruleHash } from "./rule";
 import { loadSubjects } from "./paths";
 import { commitInfo, commitRange, runSetup, withWorktree, type CommitInfo } from "./worktree";
+import { crashAdvice, crashLine, crashWitness, type CrashWitness } from "./witness";
 import type { CorpusEvent } from "./types";
 
 export interface AdoptOptions {
@@ -38,6 +39,14 @@ export interface AdoptOptions {
   every?: number;
   /** Report what would happen without writing anything. */
   dryRun?: boolean;
+  /**
+   * Affirm that a crash at the first failing commit is the regression.
+   *
+   * Adopting writes the same proof `validate` writes, so it inherits the same
+   * question: a run that died measured nothing, and a row pinned to a stack
+   * trace enforces against the instrument rather than the code.
+   */
+  crashIsTheRegression?: boolean;
 }
 
 export interface AdoptProbe {
@@ -57,6 +66,8 @@ export interface AdoptResult {
   /** The newest probed commit where it passes, if any. */
   lastPassing?: AdoptProbe;
   rowId?: string;
+  /** Set when the confirmed failure was a corpse rather than a measurement. */
+  crash?: CrashWitness;
   captured: boolean;
   validated: boolean;
   notes: string[];
@@ -178,6 +189,25 @@ export async function adopt(cwd: string, subject: string, opts: AdoptOptions): P
     return out;
   }
 
+  // A confirmed failure that is only a corpse is not a counterexample either.
+  // Adopting writes the same proof `validate` writes, and it *also* mints a
+  // row whose expectation would be a stack trace — so it is refused in the
+  // same place and on the same terms, before anything is written.
+  const crash = result.confirmation ? crashWitness(result.confirmation) : null;
+  if (crash) out.crash = crash;
+  if (crash && !opts.crashIsTheRegression) {
+    notes.push(
+      `"${subject}" failed at ${firstFailing.shortSha}, but ` +
+        crashAdvice(crash, subject, firstFailing.shortSha)
+          .join("\n")
+          .replace("the known-bad run", "that run")
+          .replace(`ratchet validate ${subject} --known-bad ${firstFailing.shortSha} --crash-is-the-regression`,
+                   `ratchet adopt ${subject} --good ${opts.good} --crash-is-the-regression`) +
+        `\n  Nothing was captured.`
+    );
+    return out;
+  }
+
   // Failing where the bug lived and passing at a later commit is exactly the
   // validation protocol, observed rather than asserted.
   out.validated = lastPassing !== undefined;
@@ -265,7 +295,10 @@ export function formatAdopt(r: AdoptResult): string {
   lines.push("");
   if (r.firstFailing) {
     lines.push(`first failing probed commit: ${r.firstFailing.shortSha} "${r.firstFailing.message}"`);
-    lines.push(`  witness: ${r.firstFailing.reason}`);
+    // A full witness is the point of this line -- except when the witness is a
+    // stack trace, where the one line that names the error says more than forty
+    // that name the loader.
+    lines.push(`  witness: ${r.crash ? crashLine(r.firstFailing.reason) : r.firstFailing.reason}`);
   }
   if (r.captured) {
     lines.push(
