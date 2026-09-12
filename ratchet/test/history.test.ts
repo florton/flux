@@ -18,10 +18,7 @@ import { validate, validatedSubjects } from "../src/validate";
 import { adopt } from "../src/adopt";
 import { commitRange, type CommitInfo } from "../src/worktree";
 import type { SubjectConfig } from "../src/types";
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-hist-"));
-}
+import { tmpDir } from "./tmp";
 
 const NODE = JSON.stringify(process.execPath);
 

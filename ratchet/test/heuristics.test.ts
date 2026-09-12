@@ -21,10 +21,7 @@ import { heuristicVersions, diffCanonical } from "../src/heuristic-history";
 import { substituteArgv, substituteShell } from "../src/substitution";
 import { observe } from "../src/probe";
 import { RULES_TEMPLATE } from "../src/templates";
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-h-"));
-}
+import { tmpDir } from "./tmp";
 
 /** Parse one heuristic block, asserting it had no problems. */
 function one(source: string) {

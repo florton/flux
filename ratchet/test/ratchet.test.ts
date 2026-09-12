@@ -15,10 +15,7 @@ import { verify } from "../src/verify";
 import { accept, reopen } from "../src/accept";
 import { report, reportData } from "../src/report";
 import { bisect, formatBisect } from "../src/bisect";
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-test-"));
-}
+import { tmpDir } from "./tmp";
 
 const NODE = process.execPath;
 

@@ -1469,17 +1469,17 @@ silently — which is what lets it run across history at all.
 
 ```
 heuristic test-suite
-  run      node --test ratchet/dist/test/
+  run      node --test --test-reporter=tap ratchet/dist/test/**/*.test.js
   timeout  600000
   applies  when ratchet/dist/test exists
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   measure  status  exit code
   rule     failing is 0
-  rule     passing is at least 193
+  rule     passing is at least 247
   rule     status is one of 0, 1
   rejects  failing 1
-  rejects  passing 192
+  rejects  passing 246
   rejects  status 7
   because  a suite that shrinks silently is how a ratchet stops ratcheting: the
   because  count is a floor, raised deliberately, never lowered by accident
@@ -1489,6 +1489,13 @@ Two measures, two rules, no plumbing. The `passing` floor is the ratchet
 applied to the ratchet's own coverage — adding tests keeps it satisfied,
 quietly deleting them does not. `applies when` makes it report `na` at commits
 that predate the build rather than manufacturing a failure there.
+
+Both halves of the `run` line are load-bearing, and both were wrong on Node 24.
+`node --test <dir>` no longer expands a directory into the files under it: it
+resolves to a single entry — the directory itself — which is not a module, so
+it exits 7. And the default reporter is `spec`, which prints `pass 247` where
+this rule reads `# pass 247`. A directory-shaped run line plus a default
+reporter meant neither measure could be read at all, on a suite that was green.
 
 **And it is the worked example of item 1.** This heuristic has never failed in
 this repository's history and never will while the suite is green, so `adopt`

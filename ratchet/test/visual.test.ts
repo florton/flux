@@ -10,10 +10,7 @@ import { recordVisual } from "../src/visual-cli";
 import { runCheck } from "../src/runner";
 import { foldRows, readEvents, rowId } from "../src/corpus";
 import type { SubjectConfig } from "../src/types";
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-visual-"));
-}
+import { tmpDir } from "./tmp";
 
 const NODE = process.execPath;
 const JUDGE = path.join(__dirname, "..", "src", "visual-cli.js");

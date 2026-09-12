@@ -29,12 +29,9 @@ import { crashWitness, crashLine } from "../src/witness";
 import { validate } from "../src/validate";
 import { readJournal } from "../src/journal";
 import type { RunResult } from "../src/runner";
+import { tmpDir } from "./tmp";
 
 const NODE = JSON.stringify(process.execPath);
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-honest-"));
-}
 
 function ran(reason: string, outcome: RunResult["outcome"] = "fail", errored = false): RunResult {
   return { outcome, pass: outcome === "pass", reason, code: outcome === "pass" ? 0 : 1, errored };

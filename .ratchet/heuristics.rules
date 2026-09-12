@@ -12,18 +12,24 @@
 # claimed to express anyone else's.
 
 heuristic test-suite
-  run      node --test ratchet/dist/test/
+  run      node --test --test-reporter=tap ratchet/dist/test/**/*.test.js
   timeout  600000
   applies  when ratchet/dist/test exists
   measure  status  exit code
   measure  failing  number after "# fail"
   measure  passing  number after "# pass"
   rule     failing is 0
-  rule     passing is at least 237
+  rule     passing is at least 247
   rule     status is one of 0, 1
   rejects  failing 1
-  rejects  passing 236
+  rejects  passing 246
   rejects  status 7
+  note     the glob is explicit because `node --test <dir>` stopped expanding a
+  note     directory into its files: on Node 24 it resolves to a single entry,
+  note     the directory itself, which dies with MODULE_NOT_FOUND and exits 7.
+  note     the reporter is explicit for the same reason: the spec reporter is
+  note     Node 24's default and prints "pass 247" where this rule reads
+  note     "# pass 247", so both measures went unread on a suite that was green.
   note     the exit code is measured so that a red suite is judged by its own
   note     counts -- "failing measured 1" -- instead of short-circuiting as a
   note     broken instrument, which is what a nonzero exit means otherwise

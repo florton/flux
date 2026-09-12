@@ -533,6 +533,171 @@ nothing honest to write beyond this.
 
 ---
 
+## Correction: the "no test writes to a fixed shared path" reasoning above was half wrong
+
+The paragraph at the "Not reproduced" section above says the suite is safe
+because "every fixture is `mkdtempSync`". That part is true and is not the
+defect. What it missed is that `mkdtempSync` on `os.tmpdir()` makes every
+fixture a **new sibling entry at the top level of `%TEMP%`**, and almost none
+of those fixtures were ever removed. On Windows the User Profile Service
+enumerates that directory during the logon notification, so the count itself
+was the hazard: 24,711 leaked `ratchet-*` directories turned a 9–15 s boot into
+102–134 s of logon.
+
+Nothing in the suite could have noticed, because the leak is a property of a
+*run*, not of any test. That is what `test/tmp-guard.test.ts` now asserts.
+
+The fix, and the measurements: `C:\Users\17207\test\new\ratchet-temp-leak-findings.md`
+(outside this repository). Fixtures are nested under one run root per process
+(`test/tmp.ts`, `src/scratch.ts`), removed on `after`/exit/signal, and leftovers
+from a killed run are collected by age at the start of every long command.
+
+Measured on the machine it was found on: one suite run left **151** top-level
+`ratchet-*` entries before this change and **0** after.
+
+---
+
+## R35 — high — **closed** — `test-suite` could not read its own suite on Node 24
+
+Found while checking the temp-leak change above, and it is the reason that suite
+looked stable while it was not. `test-suite` is the invariant that is supposed
+to notice this repository's own tests going red. On Node 24 it was reading
+nothing.
+
+Two independent causes, both in its `run` line:
+
+- **`node --test ratchet/dist/test/` no longer expands a directory.** It
+  resolves to a single entry — the directory itself — which is not a module, so
+  the run dies with `MODULE_NOT_FOUND` and exit 7. `NODE_DEBUG=test_runner` says
+  `testFiles: 1` for the directory form and `testFiles: 11` for
+  `ratchet/dist/test/**/*.test.js`.
+- **`spec` is Node 24's default reporter**, and it prints `pass 247` where this
+  rule measures `number after "# pass"`. Measured on a green suite: **one**
+  `# fail` line and **one** `# pass` line only when `--test-reporter=tap` is
+  passed, and **zero** of either without it.
+
+So both measures read *nothing*, and `status` was 7. This is the same shape as
+R28 — an invariant that cannot see the thing it names — and it is worth noting
+that R33's floor arithmetic was reasoning about `ok`/`not ok` TAP lines that
+this runner was not producing either.
+
+The rule now reads:
+
+```
+run      node --test --test-reporter=tap ratchet/dist/test/**/*.test.js
+rule     passing is at least 247
+rejects  passing 246
+```
+
+The floor was raised by hand, as the `because` clause requires. It is **247**
+because that is the measured pass count, so any deletion at all now breaks it;
+`rejects passing 246` is the arithmetic that keeps it honest. The two explicit
+flags are what make either measure readable, and neither is decoration: a
+directory argument silently measured nothing, and a default reporter silently
+measured nothing.
+
+### The shipped tool leaked the resource it was fixing
+
+Running the suite properly also exposed a leak in `scratch.ts` itself, of the
+same kind the change above was written to close. A run root is created lazily by
+`scratchRoot()` and **nothing removed it**: `removeDir` was called on fixtures
+and worktrees, but never on the root, and `src/` installed no exit handler.
+Measured with `RATCHET_TMPDIR` pointed at a private parent, so nothing else
+could collect them:
+
+| one invocation of | run roots left behind |
+|---|---|
+| `ratchet guard` | **13** |
+| `ratchet verify --jobs 8` | **13** |
+| `ratchet pr-comment` | **0** (creates no scratch) |
+
+Thirteen, not one, because each spawned process makes its own root. Nesting had
+made each leak smaller — one entry instead of ~65 — but nothing had made it
+*stop*, and the only collector was `sweepStale` a day later. On the commands
+that run on every build, that is the original hazard at one order of magnitude
+smaller.
+
+`disposeScratch()` now runs on `exit` and on `SIGINT`/`SIGTERM`, installed
+lazily when the first scratch directory is made. After it: **0** roots left by
+each of those commands. A hard kill still abandons one root — `SIGKILL`, and on
+Windows `Stop-Process`, which no handler can see — and that residue is what
+`sweepStale` is for.
+
+One test had encoded the leak as correct: `RATCHET_TMPDIR keeps scratch off the
+user profile` asserted the child's scratch directory **still existed** after the
+child exited. It now asserts the containment (the child stayed under the
+override parent) and that nothing was left behind. That is the same mistake as
+the assertions above, a third time: a test that could not tell the property from
+its violation.
+
+### Still open: the same leak in `.ratchet/tools/selfcheck.js`
+
+With the tool's own leak closed, one remains, and it is **not** in `src/`. A
+single `guard` still leaves **3** `%TEMP%\ratchet-self-*` directories:
+
+```
+ratchet-self-0iDW1J
+ratchet-self-5Tmzzl
+ratchet-self-9Fh8w
+```
+
+`.ratchet/tools/selfcheck.js:48` is the original bug in miniature —
+`mkdtempSync(path.join(os.tmpdir(), "ratchet-self-"))` in `tmp()`, called once
+per `scratch()`, with no teardown anywhere, and `pass`/`fail`/`na` all leaving
+through `process.exit`. It is the one place the fix above could not reach: the
+tool has no knowledge of the files in a ratchet home.
+
+**It was fixed, measured, and then deliberately reverted.** An `exit` hook that
+`fs.rmSync`s the directories took the count to 0, and the cost was that
+`selfcheck.js` is the instrument of five subjects — `corpus-merge-safe`,
+`fold-is-order-independent`, `recurrence-is-visible`, `reduction-preserves-cause`,
+`stringify-injective` — so editing it changes their rule hash. `guard` went from
+`validation all 11 subject(s) have a proof` to:
+
+```
+! validation  5 subject(s) have no proof they can fail: corpus-merge-safe, ...
+```
+
+That is five standing invariants disarmed to remove three empty temp
+directories, and re-arming them means `validate --known-bad` across history. Not
+a trade to make as a side effect of a temp-dir cleanup, and not one the change
+under review should decide. The hook is a two-line change to `tmp()` plus a
+`process.on("exit", ...)` when someone is prepared to re-validate the five.
+
+### The harness bug this uncovered
+
+Running the suite *properly* — which nothing had done — showed it was not
+stable. Four identical invocations of `node --test dist/test/**/*.test.js` gave
+`215/33`, `239/9`, `218/30`, `238/10` pass/fail. One escalated run produced
+**208 ENOENT errors all naming one deleted run root**, spread across 8 test
+files.
+
+The cause was in the fixture harness added by the change above, not in the tool:
+`tmp-guard.test.ts` called `sweepStale({ olderThanMs: 0, keep: [runRoot()] })`,
+which drops the age floor to zero over the *global* scratch parent while `keep`
+protects only the calling process's own root. Node runs test files in parallel
+(11 workers), so that deleted the run roots of the test files running beside it,
+and their next `mkdtempSync` died with ENOENT. A second assertion in the spawned
+child made the same mistake from the other direction — it asserted that the
+shared parent's contents were exactly its own root, which is a claim about other
+processes.
+
+Neither assertion was wrong about the property; both were phrased where it
+cannot hold. The property is now asserted in the two places that own it: "adds
+no top-level entry" inside the spawned child, against its own root, and "removes
+its run root" in the guard, on the child's own path after it exits. `tmp-child`
+also skips when the handshake env var is absent, because `**/*.test.js` collects
+it as a test file in its own right.
+
+After both: four consecutive runs at **248 tests, 247 pass, 0 fail, exit 0**,
+and 0 top-level `ratchet-*` entries left in `%TEMP%`.
+
+The lesson is R28's, one level down. That one was a test asserting a property of
+the machine; this one is a test asserting a property of its *siblings*. Both
+passed often enough to look like a green suite.
+
+---
+
 ## Not defects — plan work that is simply not built
 
 Tracked in [NEXT_STEPS_V4.md](NEXT_STEPS_V4.md); listed here so this file is a

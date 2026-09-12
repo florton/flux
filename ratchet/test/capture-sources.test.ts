@@ -7,12 +7,9 @@ import { capture } from "../src/capture";
 import { proveSubjects } from "./proof";
 import { foldRows, readEvents } from "../src/corpus";
 import type { RowState } from "../src/types";
+import { tmpDir } from "./tmp";
 
 const NODE = JSON.stringify(process.execPath);
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-src-"));
-}
 
 /**
  * A scratch project whose check fails loudly for every subject. Captures go

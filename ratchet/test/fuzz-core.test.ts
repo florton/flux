@@ -18,10 +18,7 @@ import { guard } from "../src/guard";
 import { fsck } from "../src/fsck";
 import { parseHeuristics } from "../src/heuristics";
 import { readCorpus } from "../src/corpus";
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-fuzz-test-"));
-}
+import { tmpDir } from "./tmp";
 
 test("the generator stream is deterministic and seed-separated", () => {
   const a = makeRng(20260906);

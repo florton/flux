@@ -13,12 +13,9 @@ import { verify, emptyGateWarning } from "../src/verify";
 import { subjectProofs, PROOF_LABEL } from "../src/proof";
 import { instrumentPath, instrumentPaths } from "../src/instrument";
 import { loadSubjects } from "../src/paths";
+import { tmpDir } from "./tmp";
 
 const NODE = JSON.stringify(process.execPath);
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-guard-"));
-}
 
 /**
  * A scratch project whose check fails for input 5, plus a fast-check capture

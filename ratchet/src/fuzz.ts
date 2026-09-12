@@ -40,7 +40,6 @@
  * every property it checks; a fuzzer is evidence, not a proof.
  */
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { isLegacyId, readCorpus, foldCorpus, rowId } from "./corpus";
@@ -51,6 +50,7 @@ import { fsck } from "./fsck";
 import { guard, type GuardResult } from "./guard";
 import { ddmin, minimize, type Budget } from "./shrink";
 import type { CorpusEvent } from "./types";
+import { tempDir, removeDir } from "./scratch";
 
 export type Target = "state" | "cli" | "rules";
 
@@ -1057,7 +1057,7 @@ export interface FuzzReport {
 }
 
 export async function runFuzz(opts: FuzzOptions): Promise<FuzzReport> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-fuzz-"));
+  const root = tempDir("ratchet-fuzz-");
   const reports: FuzzTargetReport[] = [];
   try {
     const findings: Finding[] = [];
@@ -1107,7 +1107,7 @@ export async function runFuzz(opts: FuzzOptions): Promise<FuzzReport> {
     }
     return { seed: opts.seed, targets: reports, ok: findings.length === 0 };
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    removeDir(root);
   }
 }
 

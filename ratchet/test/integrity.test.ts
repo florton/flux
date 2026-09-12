@@ -13,10 +13,7 @@ import { verify, countOutcomes } from "../src/verify";
 import { accept, reopen } from "../src/accept";
 import { fsck } from "../src/fsck";
 import { listRows, showRow, formatRow } from "../src/inspect";
-
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-test-"));
-}
+import { tmpDir } from "./tmp";
 
 const NODE = process.execPath;
 // process.execPath contains a space on Windows; the tokenizer would split it.

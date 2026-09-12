@@ -30,6 +30,7 @@ import { subjectProofs } from "./proof";
 import { ruleHash } from "./rule";
 import { toSubject } from "./heuristic-config";
 import { RULES_TEMPLATE, CONFIG_TEMPLATE, INIT_MESSAGE, AGENTS_TEMPLATE } from "./templates";
+import { sweepStale } from "./scratch";
 
 function usage(): string {
   return `ratchet — regression memory for AI-assisted development
@@ -112,6 +113,20 @@ function requireRoot(): string {
 function homeDir(cwd: string): string {
   const fromEnv = process.env.RATCHET_HOME;
   return fromEnv !== undefined && fromEnv !== "" ? fromEnv : path.join(cwd, ".ratchet");
+}
+
+/**
+ * Collect the scratch roots of runs that never reached their teardown.
+ *
+ * A run killed with `SIGKILL`, or by a build timeout, cannot clean up after
+ * itself, so its root has to be collected by the next run. Only the long
+ * commands do it, and only entries older than a day, so a concurrent run's
+ * root is never a candidate. This is the self-healing half of the fixture
+ * leak that put 24,711 `ratchet-*` directories in `%TEMP%`; nesting is the
+ * half that bounds the damage when nothing runs for a while.
+ */
+function collectScratch(): void {
+  sweepStale();
 }
 
 interface Args {
@@ -223,6 +238,7 @@ async function main(): Promise<void> {
       const cwd = requireRoot();
       const jobs = flags.get("--jobs");
       const stale = flags.get("--stale-after");
+      collectScratch();
       const result = await guard(cwd, {
         ratchetHome: homeDir(cwd),
         strict: bools.has("--strict"),
@@ -377,6 +393,7 @@ async function main(): Promise<void> {
     case "pr-comment": {
       const cwd = requireRoot();
       const dir = homeDir(cwd);
+      collectScratch();
       const results = await verify(cwd, { ratchetHome: dir, quiet: true });
       const config = loadSubjects(dir);
       const report = reportData(cwd);
@@ -464,6 +481,7 @@ async function main(): Promise<void> {
     case "verify": {
       const cwd = requireRoot();
       const jobs = flags.get("--jobs");
+      collectScratch();
       await verifyAndExit(cwd, {
         row: flags.get("--row"),
         subject: flags.get("--subject"),

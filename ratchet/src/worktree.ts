@@ -1,8 +1,8 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { runCheckAsync, type RunResult } from "./runner";
+import { tempDir, removeDir } from "./scratch";
 
 export interface GitResult {
   status: number;
@@ -64,13 +64,13 @@ interface CreatedWorktree {
 }
 
 function createWorktree(cwd: string, home: string, startSha: string): CreatedWorktree {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ratchet-wt-"));
+  const tmp = tempDir("ratchet-wt-");
   const worktree = path.join(tmp, "wt");
   const tempHome = path.join(tmp, ".ratchet");
   fs.cpSync(home, tempHome, { recursive: true });
   const add = git(cwd, ["worktree", "add", "--detach", worktree, startSha]);
   if (add.status !== 0) {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    removeDir(tmp);
     throw new Error(`could not create worktree: ${add.stderr}`);
   }
   return { worktree, tmp };
@@ -78,7 +78,7 @@ function createWorktree(cwd: string, home: string, startSha: string): CreatedWor
 
 function removeWorktrees(cwd: string, created: CreatedWorktree[]): void {
   for (const c of created) git(cwd, ["worktree", "remove", "--force", c.worktree]);
-  for (const c of created) fs.rmSync(c.tmp, { recursive: true, force: true });
+  for (const c of created) removeDir(c.tmp);
 }
 
 /**
